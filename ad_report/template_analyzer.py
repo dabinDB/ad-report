@@ -136,12 +136,11 @@ def _definition_from_context(
     data_start = header_row + 1
     data_end = data_start + (limit - 1 if limit else 19)
 
-    return {
+    definition = {
         "id": _slugify(f"{sheet_name}_{safe_name}_{header_row}"),
         "name": safe_name,
         "group_by": group_by,
         "sort": {"by": sort_by, "order": "desc"},
-        "limit": limit,
         "metrics": metrics,
         "total_row": {"enabled": not bool(limit), "position": "top", "label": "합계"},
         "location": {
@@ -155,6 +154,9 @@ def _definition_from_context(
         },
         "metadata": {"created_by": "ai", "ai_confidence": 0.72, "user_verified": False},
     }
+    if limit:
+        definition["limit"] = limit
+    return definition
 
 
 def _row_text(sheet: Any, row: int) -> str:

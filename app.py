@@ -87,7 +87,10 @@ def definition_editor(definition: dict[str, Any], index: int, dictionary: Standa
         sort["by"] = c1.selectbox("정렬 기준", sort_options or [""], index=(sort_options or [""]).index(sort_default), key=f"sort_by_{index}")
         sort["order"] = c2.selectbox("정렬 순서", ["desc", "asc"], index=0 if sort.get("order", "desc") == "desc" else 1, key=f"sort_order_{index}")
         limit_value = c3.number_input("Limit", min_value=0, value=int(edited.get("limit") or 0), key=f"limit_{index}")
-        edited["limit"] = int(limit_value) if limit_value else None
+        if limit_value:
+            edited["limit"] = int(limit_value)
+        else:
+            edited.pop("limit", None)
         edited.setdefault("total_row", {})["enabled"] = c4.checkbox("합계 행", value=bool(edited.get("total_row", {}).get("enabled")), key=f"total_{index}")
 
         st.caption("템플릿 위치")
