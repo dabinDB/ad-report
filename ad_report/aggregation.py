@@ -47,7 +47,7 @@ def normalize_source_dataframe(df: pd.DataFrame, dictionary: StandardDictionary)
 
     for metric in dictionary.metric_names:
         if metric in normalized.columns:
-            normalized[metric] = pd.to_numeric(normalized[metric], errors="coerce").fillna(0)
+            normalized[metric] = _numeric_series(normalized, metric)
     return normalized
 
 
@@ -127,6 +127,15 @@ def _consolidate_duplicate_columns(df: pd.DataFrame, dictionary: StandardDiction
         else:
             output[column] = values.replace("", pd.NA).bfill(axis=1).iloc[:, 0]
     return output
+
+
+def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    values = df.loc[:, df.columns == column]
+    if values.shape[1] > 1:
+        values = values.apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+    else:
+        values = values.iloc[:, 0]
+    return pd.to_numeric(values, errors="coerce").fillna(0)
 
 
 def _duplicate_policy(mapped_to: str | None, dictionary: StandardDictionary) -> str | None:
