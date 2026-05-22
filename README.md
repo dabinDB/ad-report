@@ -15,11 +15,11 @@
 1. 이 저장소를 GitHub에 push합니다.
 2. Streamlit Cloud에서 저장소를 연결합니다.
 3. Main file path를 `app.py`로 지정합니다.
-4. OpenAI 기반 분석을 쓰려면 Streamlit secrets에 아래 값을 추가합니다.
+4. Gemini 기반 분석을 쓰려면 Streamlit secrets에 아래 값을 추가합니다.
 
 ```toml
-OPENAI_API_KEY = "sk-..."
-OPENAI_MODEL = "gpt-4o-mini"
+GEMINI_API_KEY = "..."
+GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 ```
 
 API 키가 없어도 제목/헤더 기반 분석으로 동작합니다.

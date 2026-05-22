@@ -42,7 +42,7 @@ def analyze_template(workbook_bytes: bytes, dictionary: StandardDictionary) -> l
     return definitions
 
 
-def analyze_with_openai(
+def analyze_with_gemini(
     workbook_bytes: bytes,
     dictionary: StandardDictionary,
     schema: dict[str, Any],
@@ -50,32 +50,28 @@ def analyze_with_openai(
     model: str,
 ) -> list[dict[str, Any]]:
     try:
-        from openai import OpenAI
+        from google import genai
     except Exception:
         return analyze_template(workbook_bytes, dictionary)
 
     compact = extract_workbook_outline(workbook_bytes, dictionary)
-    client = OpenAI(api_key=api_key)
-    prompt = {
-        "role": "user",
-        "content": (
-            "엑셀 광고 보고서 템플릿의 표 정의를 추출하세요. "
-            "반드시 JSON 배열만 반환하세요. 각 원소는 id, name, group_by, sort, "
-            "limit, metrics, location, metadata를 포함합니다.\n\n"
-            f"표준 차원: {dictionary.dimension_names}\n"
-            f"표준 지표: {dictionary.metric_names}\n"
-            f"JSON Schema: {json.dumps(schema, ensure_ascii=False)}\n"
-            f"Workbook outline: {json.dumps(compact, ensure_ascii=False)}"
-        ),
-    }
+    client = genai.Client(api_key=api_key)
+    prompt = (
+        "엑셀 광고 보고서 템플릿의 표 정의를 추출하세요. "
+        "반드시 JSON 객체만 반환하세요. 최상위 키는 definitions 또는 tables 입니다. "
+        "각 표는 id, name, group_by, sort, limit, metrics, location, metadata를 포함합니다.\n\n"
+        f"표준 차원: {dictionary.dimension_names}\n"
+        f"표준 지표: {dictionary.metric_names}\n"
+        f"JSON Schema: {json.dumps(schema, ensure_ascii=False)}\n"
+        f"Workbook outline: {json.dumps(compact, ensure_ascii=False)}"
+    )
     try:
-        response = client.chat.completions.create(
+        response = client.models.generate_content(
             model=model,
-            messages=[prompt],
-            temperature=0,
-            response_format={"type": "json_object"},
+            contents=prompt,
+            config={"temperature": 0, "response_mime_type": "application/json"},
         )
-        content = response.choices[0].message.content or "{}"
+        content = response.text or "{}"
         parsed = json.loads(content)
         if isinstance(parsed, dict):
             return parsed.get("tables", parsed.get("definitions", []))

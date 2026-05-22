@@ -11,7 +11,7 @@ import yaml
 
 from ad_report.aggregation import aggregate_table, normalize_source_dataframe
 from ad_report.dictionary import StandardDictionary, load_yaml
-from ad_report.template_analyzer import analyze_template, analyze_with_openai
+from ad_report.template_analyzer import analyze_template, analyze_with_gemini
 from ad_report.validation import validate_definition
 from ad_report.workbook_writer import fill_workbook
 
@@ -100,9 +100,14 @@ def main() -> None:
 
     with st.sidebar:
         st.header("설정")
-        use_openai = st.toggle("OpenAI로 템플릿 분석", value=False)
-        api_key = st.text_input("OpenAI API Key", type="password", value=st.secrets.get("OPENAI_API_KEY", ""))
-        model = st.text_input("Model", value=st.secrets.get("OPENAI_MODEL", "gpt-4o-mini"))
+        use_gemini = st.toggle("Gemini로 템플릿 분석", value=True)
+        api_key = st.secrets.get("GEMINI_API_KEY", "")
+        model = st.secrets.get("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
+        if api_key:
+            st.success("Gemini API 키가 Streamlit secrets에서 로드되었습니다.")
+        else:
+            st.warning("GEMINI_API_KEY가 없으면 휴리스틱 분석으로 동작합니다.")
+        st.caption(f"Model: `{model}`")
         st.divider()
         st.download_button(
             "표준 차원 사전 다운로드",
@@ -132,8 +137,8 @@ def main() -> None:
 
     if "definitions" not in st.session_state:
         with st.spinner("템플릿 구조를 분석하는 중입니다..."):
-            if use_openai and api_key:
-                st.session_state.definitions = analyze_with_openai(template_bytes, dictionary, schema, api_key, model)
+            if use_gemini and api_key:
+                st.session_state.definitions = analyze_with_gemini(template_bytes, dictionary, schema, api_key, model)
             else:
                 st.session_state.definitions = analyze_template(template_bytes, dictionary)
 
