@@ -38,6 +38,16 @@ def read_source_file(uploaded_file: Any) -> pd.DataFrame:
     return pd.read_excel(uploaded_file)
 
 
+def apply_uploaded_media_name(df: pd.DataFrame, media_name: str, dictionary: StandardDictionary) -> pd.DataFrame:
+    output = df.copy()
+    if not media_name.strip():
+        return output
+    has_media_column = any(dictionary.match(column) == "매체" for column in output.columns)
+    if not has_media_column:
+        output["매체"] = media_name.strip()
+    return output
+
+
 def definition_editor(definition: dict[str, Any], index: int, dictionary: StandardDictionary) -> dict[str, Any]:
     edited = json.loads(json.dumps(definition, ensure_ascii=False))
     with st.expander(f"{index + 1}. {definition.get('name', '표 정의')}", expanded=index == 0):
@@ -122,6 +132,11 @@ def main() -> None:
 
     template_file = st.file_uploader("1. 평소 쓰던 엑셀 보고서 템플릿 업로드", type=["xlsx"])
     source_file = st.file_uploader("2. 원본 매체 데이터 업로드", type=["xlsx", "csv", "tsv"])
+    media_name = st.text_input(
+        "3. 업로드한 원본 데이터의 매체명",
+        placeholder="예: 네이버, 카카오, 구글, 메타",
+        help="원본 데이터에 매체 컬럼이 없으면 이 값이 매체 기준으로 사용됩니다.",
+    )
 
     if not template_file or not source_file:
         st.info("템플릿과 원본 데이터를 업로드하면 표 정의 추출 화면이 열립니다.")
@@ -129,7 +144,7 @@ def main() -> None:
         return
 
     template_bytes = template_file.getvalue()
-    source_raw = read_source_file(source_file)
+    source_raw = apply_uploaded_media_name(read_source_file(source_file), media_name, dictionary)
     source_mapping_schema = build_source_mapping_schema(source_raw, dictionary)
     source_df = normalize_source_dataframe(source_raw, dictionary)
 
