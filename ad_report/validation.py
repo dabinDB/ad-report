@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .dictionary import StandardDictionary
+from .workbook_writer import normalize_excel_column
 
 
 def validate_definition(
@@ -20,6 +21,7 @@ def validate_definition(
     group_by = definition.get("group_by", [])
     metrics = definition.get("metrics", [])
     sort_by = (definition.get("sort") or {}).get("by")
+    location = definition.get("location", {})
 
     for dimension in group_by:
         if not dictionary.is_dimension(dimension):
@@ -29,6 +31,8 @@ def validate_definition(
             errors.append(f"metrics 값이 표준 지표에 없습니다: {metric}")
     if sort_by and sort_by not in group_by and sort_by not in metrics:
         warnings.append(f"sort.by가 group_by 또는 metrics에 없습니다: {sort_by}")
+    if location:
+        _validate_location_columns(location, errors)
     if definition.get("limit") and definition.get("total_row", {}).get("enabled"):
         warnings.append("limit이 있는 TOP 표에 합계 행이 켜져 있습니다. 의미가 모호할 수 있습니다.")
     if "요일" in group_by and sort_by != "요일":
@@ -41,3 +45,16 @@ def validate_definition(
             if missing:
                 warnings.append(f"{metric} 재계산에는 원본 데이터의 {', '.join(missing)}가 필요합니다.")
     return errors, warnings
+
+
+def _validate_location_columns(location: dict[str, Any], errors: list[str]) -> None:
+    try:
+        normalize_excel_column(location.get("label_col"))
+    except ValueError as exc:
+        errors.append(f"location.label_col 오류: {exc}")
+
+    for column in (location.get("columns") or {}).keys():
+        try:
+            normalize_excel_column(column)
+        except ValueError as exc:
+            errors.append(f"location.columns 오류: {exc}")

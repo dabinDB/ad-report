@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.utils import column_index_from_string
+from openpyxl.utils import column_index_from_string, get_column_letter
 
 from .aggregation import aggregate_table, build_total_row
 from .dictionary import StandardDictionary
@@ -24,11 +24,12 @@ def fill_workbook(
         result = aggregate_table(source_df, definition, dictionary)
         start_row = int(location["data_start_row"])
         end_row = int(location["data_end_row"])
-        label_col_idx = column_index_from_string(location["label_col"])
-        metric_columns = location.get("columns", {})
+        label_col = normalize_excel_column(location["label_col"])
+        label_col_idx = column_index_from_string(label_col)
+        metric_columns = normalize_metric_columns(location.get("columns", {}))
         group_by = definition.get("group_by", [])
 
-        _clear_range(sheet, start_row, end_row, [location["label_col"], *metric_columns.keys()])
+        _clear_range(sheet, start_row, end_row, [label_col, *metric_columns.keys()])
 
         write_row = start_row
         total_spec = definition.get("total_row", {})
@@ -58,13 +59,37 @@ def fill_workbook(
 def _clear_range(sheet: Any, start_row: int, end_row: int, columns: list[str]) -> None:
     for row in range(start_row, end_row + 1):
         for column in columns:
-            sheet.cell(row, column_index_from_string(column)).value = None
+            sheet.cell(row, column_index_from_string(normalize_excel_column(column))).value = None
 
 
 def _write_metric_cells(sheet: Any, row: int, metric_columns: dict[str, str], values: dict[str, Any]) -> None:
     for column, metric in metric_columns.items():
         value = values.get(metric)
-        sheet.cell(row, column_index_from_string(column)).value = _scalar(value)
+        sheet.cell(row, column_index_from_string(normalize_excel_column(column))).value = _scalar(value)
+
+
+def normalize_metric_columns(columns: dict[Any, Any]) -> dict[str, str]:
+    normalized = {}
+    for column, metric in (columns or {}).items():
+        try:
+            normalized[normalize_excel_column(column)] = str(metric)
+        except ValueError:
+            normalized[normalize_excel_column(metric)] = str(column)
+    return normalized
+
+
+def normalize_excel_column(column: Any) -> str:
+    if isinstance(column, int):
+        if column < 1:
+            raise ValueError(f"엑셀 컬럼 번호는 1 이상이어야 합니다: {column}")
+        return get_column_letter(column)
+    text = "" if column is None else str(column).strip().upper()
+    if text.isdigit():
+        return get_column_letter(int(text))
+    if not text.isalpha():
+        raise ValueError(f"엑셀 컬럼은 A, B, C 같은 문자여야 합니다: {column!r}")
+    column_index_from_string(text)
+    return text
 
 
 def _label_value(row: pd.Series, group_by: list[str]) -> str:
