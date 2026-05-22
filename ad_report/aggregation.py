@@ -10,6 +10,30 @@ from .dictionary import StandardDictionary
 WEEKDAY_ORDER = ["월", "화", "수", "목", "금", "토", "일"]
 
 
+def build_source_mapping_schema(df: pd.DataFrame, dictionary: StandardDictionary) -> list[dict[str, Any]]:
+    schema = []
+    mapped_counts: dict[str, int] = {}
+    for column in df.columns:
+        matched = dictionary.match(column)
+        kind = "unmapped"
+        if matched:
+            mapped_counts[matched] = mapped_counts.get(matched, 0) + 1
+            kind = "dimension" if dictionary.is_dimension(matched) else "metric"
+        schema.append(
+            {
+                "source_column": str(column),
+                "mapped_to": matched,
+                "kind": kind,
+                "aggregation_when_duplicate": _duplicate_policy(matched, dictionary),
+            }
+        )
+
+    for item in schema:
+        mapped_to = item.get("mapped_to")
+        item["duplicate_group_size"] = mapped_counts.get(mapped_to, 0) if mapped_to else 0
+    return schema
+
+
 def normalize_source_dataframe(df: pd.DataFrame, dictionary: StandardDictionary) -> pd.DataFrame:
     renamed = {}
     for column in df.columns:
@@ -17,6 +41,7 @@ def normalize_source_dataframe(df: pd.DataFrame, dictionary: StandardDictionary)
         if matched:
             renamed[column] = matched
     normalized = df.rename(columns=renamed).copy()
+    normalized = _consolidate_duplicate_columns(normalized, dictionary)
     normalized = _derive_time_dimensions(normalized, dictionary)
     normalized = _apply_value_mappings(normalized, dictionary)
 
@@ -88,6 +113,30 @@ def _weighted_metric(grouped: Any, df: pd.DataFrame, spec: dict[str, Any]) -> li
         0 if row[denominator] == 0 else row[numerator] / row[denominator] * multiplier
         for _, row in sums.iterrows()
     ]
+
+
+def _consolidate_duplicate_columns(df: pd.DataFrame, dictionary: StandardDictionary) -> pd.DataFrame:
+    output = pd.DataFrame(index=df.index)
+    for column in dict.fromkeys(df.columns):
+        values = df.loc[:, df.columns == column]
+        if values.shape[1] == 1:
+            output[column] = values.iloc[:, 0]
+        elif dictionary.is_metric(column):
+            numeric_values = values.apply(pd.to_numeric, errors="coerce").fillna(0)
+            output[column] = numeric_values.sum(axis=1)
+        else:
+            output[column] = values.replace("", pd.NA).bfill(axis=1).iloc[:, 0]
+    return output
+
+
+def _duplicate_policy(mapped_to: str | None, dictionary: StandardDictionary) -> str | None:
+    if not mapped_to:
+        return None
+    if dictionary.is_metric(mapped_to):
+        return "sum_columns"
+    if dictionary.is_dimension(mapped_to):
+        return "first_non_empty"
+    return None
 
 
 def _sort_output(output: pd.DataFrame, definition: dict[str, Any], group_by: list[str]) -> pd.DataFrame:

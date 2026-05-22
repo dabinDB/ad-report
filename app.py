@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 import yaml
 
-from ad_report.aggregation import aggregate_table, normalize_source_dataframe
+from ad_report.aggregation import aggregate_table, build_source_mapping_schema, normalize_source_dataframe
 from ad_report.dictionary import StandardDictionary, load_yaml
 from ad_report.template_analyzer import analyze_template, analyze_with_gemini
 from ad_report.validation import validate_definition
@@ -130,9 +130,16 @@ def main() -> None:
 
     template_bytes = template_file.getvalue()
     source_raw = read_source_file(source_file)
+    source_mapping_schema = build_source_mapping_schema(source_raw, dictionary)
     source_df = normalize_source_dataframe(source_raw, dictionary)
 
-    st.subheader("원본 데이터 미리보기")
+    st.subheader("원본 매핑 스키마")
+    mapping_df = pd.DataFrame(source_mapping_schema)
+    st.dataframe(mapping_df, use_container_width=True)
+    with st.expander("원본 매핑 스키마 JSON"):
+        st.code(json.dumps(source_mapping_schema, ensure_ascii=False, indent=2), language="json")
+
+    st.subheader("정규화된 원본 데이터 미리보기")
     st.dataframe(source_df.head(20), use_container_width=True)
 
     if "definitions" not in st.session_state:
@@ -142,11 +149,15 @@ def main() -> None:
             else:
                 st.session_state.definitions = analyze_template(template_bytes, dictionary)
 
-    st.subheader("AI 추출 표 정의 검수")
+    st.subheader("템플릿 분석 결과 스키마")
     if not st.session_state.definitions:
         st.warning("자동으로 찾은 표가 없습니다. 템플릿에 표 제목과 헤더 행이 있는지 확인하거나, 아래 예시를 복사해 직접 정의를 추가하세요.")
         show_library(table_config)
         return
+    with st.expander("템플릿 분석 결과 JSON", expanded=False):
+        st.code(json.dumps(st.session_state.definitions, ensure_ascii=False, indent=2), language="json")
+
+    st.subheader("표 정의 검수")
 
     edited_definitions = []
     all_errors = []
