@@ -231,7 +231,10 @@ def main() -> None:
             type=["xlsx"],
             key="analysis_template_file",
         )
-        if st.button("템플릿 분석하기", type="primary", disabled=analysis_template is None):
+        analyze_clicked = st.button("템플릿 분석하기", type="primary", disabled=analysis_template is None)
+        if analyze_clicked and analysis_template is None:
+            st.error("분석할 엑셀 템플릿을 먼저 업로드하세요.")
+        elif analyze_clicked:
             with st.spinner("템플릿 구조를 분석하는 중입니다..."):
                 st.session_state.analysis_definitions = analyze_definitions(
                     analysis_template.getvalue(),
@@ -280,7 +283,10 @@ def main() -> None:
             if st.session_state.get("report_signature") != report_signature:
                 st.session_state.pop("report_definitions", None)
 
-        if st.button("표 정의 검수 시작", type="primary", disabled=not ready_for_review):
+        review_clicked = st.button("표 정의 검수 시작", type="primary", disabled=not ready_for_review)
+        if review_clicked and not ready_for_review:
+            st.error("보고서 생성용 템플릿과 원본 매체 데이터를 모두 업로드하세요.")
+        elif review_clicked:
             with st.spinner("보고서용 템플릿을 분석하는 중입니다..."):
                 st.session_state.report_definitions = analyze_definitions(
                     report_template_file.getvalue(),
