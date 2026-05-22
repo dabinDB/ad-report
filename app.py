@@ -13,7 +13,7 @@ from ad_report.aggregation import aggregate_table, build_source_mapping_schema, 
 from ad_report.dictionary import StandardDictionary, load_yaml
 from ad_report.template_analyzer import analyze_template, analyze_with_gemini
 from ad_report.validation import validate_definition
-from ad_report.workbook_writer import fill_workbook
+from ad_report.workbook_writer import fill_workbook, normalize_excel_column
 
 
 ROOT = Path(__file__).parent
@@ -57,12 +57,52 @@ def analyze_definitions(
     model: str,
 ) -> list[dict[str, Any]]:
     if use_gemini and api_key:
-        return analyze_with_gemini(template_bytes, dictionary, schema, api_key, model)
-    return analyze_template(template_bytes, dictionary)
+        definitions = analyze_with_gemini(template_bytes, dictionary, schema, api_key, model)
+    else:
+        definitions = analyze_template(template_bytes, dictionary)
+    return [normalize_definition_location(definition, dictionary) for definition in definitions]
+
+
+def normalize_definition_location(definition: dict[str, Any], dictionary: StandardDictionary) -> dict[str, Any]:
+    normalized = json.loads(json.dumps(definition, ensure_ascii=False))
+    location = normalized.setdefault("location", {})
+    columns = location.get("columns") or {}
+    fixed_columns: dict[str, str] = {}
+    group_by = set(normalized.get("group_by", []))
+
+    for key, value in columns.items():
+        column, field = _split_column_mapping(key, value)
+        if not column or not field:
+            fixed_columns[str(key)] = str(value)
+            continue
+        if dictionary.is_dimension(field) and (field in group_by or not location.get("label_col")):
+            location["label_col"] = column
+        elif dictionary.is_metric(field):
+            fixed_columns[column] = field
+        else:
+            fixed_columns[column] = field
+
+    if location.get("label_col") is not None:
+        try:
+            location["label_col"] = normalize_excel_column(location["label_col"])
+        except ValueError:
+            pass
+    location["columns"] = fixed_columns
+    return normalized
+
+
+def _split_column_mapping(key: Any, value: Any) -> tuple[str | None, str | None]:
+    try:
+        return normalize_excel_column(key), str(value)
+    except ValueError:
+        try:
+            return normalize_excel_column(value), str(key)
+        except ValueError:
+            return None, None
 
 
 def definition_editor(definition: dict[str, Any], index: int, dictionary: StandardDictionary) -> dict[str, Any]:
-    edited = json.loads(json.dumps(definition, ensure_ascii=False))
+    edited = normalize_definition_location(definition, dictionary)
     with st.expander(f"{index + 1}. {definition.get('name', '표 정의')}", expanded=index == 0):
         left, mid, right = st.columns([1.2, 1, 1])
         edited["name"] = left.text_input("표 이름", edited.get("name", ""), key=f"name_{index}")
@@ -109,6 +149,7 @@ def definition_editor(definition: dict[str, Any], index: int, dictionary: Standa
         )
         try:
             loc["columns"] = json.loads(columns_json)
+            edited = normalize_definition_location(edited, dictionary)
         except json.JSONDecodeError:
             st.error("컬럼 매핑 JSON 형식이 올바르지 않습니다.")
 
