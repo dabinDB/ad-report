@@ -62,6 +62,7 @@ def analyze_with_gemini(
         "반드시 JSON 객체만 반환하세요. 최상위 키는 definitions 또는 tables 입니다. "
         "각 표는 id, name, group_by, sort, limit, metrics, location, metadata를 포함합니다. "
         "헤더 아래에 합계/총계 행이 있으면 total_row.row에 행 번호를 넣고, "
+        "일평균/평균 행이 있으면 average_row.row에 행 번호를 넣고, "
         "전월 비교/전주 비교/증감 행이 있으면 compare_row.row에 행 번호를 넣으세요. "
         "location.data_start_row는 실제 상세 데이터가 시작되는 첫 행이어야 합니다.\n\n"
         f"표준 차원: {dictionary.dimension_names}\n"
@@ -162,6 +163,8 @@ def _definition_from_context(
     }
     if "total_row" in summary_rows:
         definition["total_row"] = summary_rows["total_row"]
+    if "average_row" in summary_rows:
+        definition["average_row"] = summary_rows["average_row"]
     elif not limit:
         definition["total_row"] = {"enabled": True, "position": "top", "label": "합계"}
     if "compare_row" in summary_rows:
@@ -260,7 +263,14 @@ def _detect_summary_rows(sheet: Any, header_row: int, label_col: str) -> dict[st
         value = sheet.cell(row, label_col_idx).value
         text = "" if value is None else str(value).strip()
         normalized = normalize_token(text)
-        if "합계" in normalized or "총계" in normalized:
+        if "평균" in normalized:
+            summary_rows["average_row"] = {
+                "enabled": True,
+                "row": row,
+                "label": text or "일평균",
+                "mode": "daily_average",
+            }
+        elif "합계" in normalized or "총계" in normalized:
             summary_rows["total_row"] = {"enabled": True, "row": row, "label": text or "합계"}
         elif "비교" in normalized or "전월" in normalized or "전주" in normalized or "증감" in normalized:
             summary_rows["compare_row"] = {

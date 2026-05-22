@@ -90,6 +90,10 @@ def normalize_definition_location(definition: dict[str, Any], dictionary: Standa
     location["columns"] = fixed_columns
     normalized["total_row"] = _normalize_summary_row(normalized.get("total_row"), "합계")
     normalized["compare_row"] = _normalize_summary_row(normalized.get("compare_row"), "전월 비교")
+    normalized["average_row"] = _normalize_summary_row(normalized.get("average_row"), "일평균")
+    if _is_average_label(normalized["total_row"].get("label")) and not normalized["average_row"].get("enabled"):
+        normalized["average_row"] = {**normalized["total_row"], "mode": "daily_average"}
+        normalized["total_row"] = {"enabled": False, "label": "합계"}
     return normalized
 
 
@@ -120,6 +124,10 @@ def _split_column_mapping(key: Any, value: Any) -> tuple[str | None, str | None]
             return normalize_excel_column(value), str(key)
         except ValueError:
             return None, None
+
+
+def _is_average_label(label: Any) -> bool:
+    return "평균" in str(label or "")
 
 
 def definition_editor(definition: dict[str, Any], index: int, dictionary: StandardDictionary) -> dict[str, Any]:
@@ -155,11 +163,14 @@ def definition_editor(definition: dict[str, Any], index: int, dictionary: Standa
 
         total_row = edited.setdefault("total_row", {"enabled": False, "label": "합계"})
         compare_row = edited.setdefault("compare_row", {"enabled": False, "label": "전월 비교"})
-        r1, r2, r3, r4 = st.columns(4)
+        average_row = edited.setdefault("average_row", {"enabled": False, "label": "일평균"})
+        r1, r2, r3, r4, r5, r6 = st.columns(6)
         total_row["enabled"] = r1.checkbox("합계 행", value=bool(total_row.get("enabled")), key=f"total_{index}")
         total_row_num = r2.number_input("합계 행 번호", min_value=0, value=int(total_row.get("row") or 0), key=f"total_row_{index}")
-        compare_row["enabled"] = r3.checkbox("비교 행", value=bool(compare_row.get("enabled")), key=f"compare_{index}")
-        compare_row_num = r4.number_input("비교 행 번호", min_value=0, value=int(compare_row.get("row") or 0), key=f"compare_row_{index}")
+        average_row["enabled"] = r3.checkbox("평균 행", value=bool(average_row.get("enabled")), key=f"average_{index}")
+        average_row_num = r4.number_input("평균 행 번호", min_value=0, value=int(average_row.get("row") or 0), key=f"average_row_{index}")
+        compare_row["enabled"] = r5.checkbox("비교 행", value=bool(compare_row.get("enabled")), key=f"compare_{index}")
+        compare_row_num = r6.number_input("비교 행 번호", min_value=0, value=int(compare_row.get("row") or 0), key=f"compare_row_{index}")
         if total_row_num:
             total_row["row"] = int(total_row_num)
         else:
@@ -169,6 +180,11 @@ def definition_editor(definition: dict[str, Any], index: int, dictionary: Standa
             compare_row.setdefault("mode", "previous_row")
         else:
             compare_row.pop("row", None)
+        if average_row_num:
+            average_row["row"] = int(average_row_num)
+            average_row.setdefault("mode", "daily_average")
+        else:
+            average_row.pop("row", None)
 
         st.caption("템플릿 위치")
         p1, p2, p3, p4, p5 = st.columns(5)

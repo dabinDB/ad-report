@@ -30,9 +30,10 @@ def fill_workbook(
         group_by = definition.get("group_by", [])
         total_spec = normalize_summary_row(definition.get("total_row"), "합계")
         compare_spec = normalize_summary_row(definition.get("compare_row"), "전월 비교")
+        average_spec = normalize_summary_row(definition.get("average_row"), "일평균")
         reserved_rows = {
             row
-            for row in [total_spec.get("row"), compare_spec.get("row")]
+            for row in [total_spec.get("row"), average_spec.get("row"), compare_spec.get("row")]
             if isinstance(row, int) and start_row <= row <= end_row
         }
 
@@ -42,6 +43,11 @@ def fill_workbook(
             total = build_total_row(source_df, definition, dictionary)
             sheet.cell(total_spec["row"], label_col_idx).value = total_spec.get("label", "합계")
             _write_metric_cells(sheet, total_spec["row"], metric_columns, total)
+
+        if average_spec.get("enabled") and average_spec.get("row"):
+            average = build_average_row(source_df, result, definition, dictionary)
+            sheet.cell(average_spec["row"], label_col_idx).value = average_spec.get("label", "일평균")
+            _write_metric_cells(sheet, average_spec["row"], metric_columns, average)
 
         if compare_spec.get("enabled") and compare_spec.get("row"):
             compare_values = build_compare_row(result, definition, dictionary)
@@ -109,6 +115,29 @@ def build_compare_row(result: pd.DataFrame, definition: dict[str, Any], dictiona
     return values
 
 
+def build_average_row(
+    source_df: pd.DataFrame,
+    result: pd.DataFrame,
+    definition: dict[str, Any],
+    dictionary: StandardDictionary,
+) -> dict[str, Any]:
+    metrics = definition.get("metrics", [])
+    day_count = _daily_denominator(source_df)
+    total_values = build_total_row(source_df, definition, dictionary)
+    values: dict[str, Any] = {}
+    for metric in metrics:
+        spec = dictionary.metric_spec(metric)
+        if spec.get("aggregation") == "weighted_avg":
+            values[metric] = total_values.get(metric)
+        elif metric in source_df.columns and day_count:
+            values[metric] = _number(source_df[metric].sum()) / day_count
+        elif metric in result.columns and len(result):
+            values[metric] = result[metric].apply(_number).mean()
+        else:
+            values[metric] = None
+    return values
+
+
 def normalize_summary_row(value: Any, default_label: str) -> dict[str, Any]:
     if isinstance(value, int):
         return {"enabled": True, "row": value, "label": default_label}
@@ -125,6 +154,13 @@ def normalize_summary_row(value: Any, default_label: str) -> dict[str, Any]:
             normalized["mode"] = value["mode"]
         return normalized
     return {"enabled": False, "label": default_label}
+
+
+def _daily_denominator(source_df: pd.DataFrame) -> int:
+    if "날짜" not in source_df.columns:
+        return 0
+    dates = pd.to_datetime(source_df["날짜"], errors="coerce").dropna()
+    return int(dates.dt.normalize().nunique())
 
 
 def _next_data_row(row: int, reserved_rows: set[int]) -> int:
