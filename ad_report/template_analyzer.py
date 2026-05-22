@@ -87,13 +87,14 @@ def extract_workbook_outline(workbook_bytes: bytes, dictionary: StandardDictiona
     outline = []
     for sheet in workbook.worksheets:
         rows = []
-        for row in sheet.iter_rows(max_row=min(sheet.max_row or 1, 120), values_only=False):
+        max_row = min(sheet.max_row or 1, 120)
+        for row_idx, row in enumerate(sheet.iter_rows(max_row=max_row, values_only=False), start=1):
             values = [cell.value for cell in row[:20]]
             if any(value is not None and str(value).strip() for value in values):
                 matches = [dictionary.match(value) for value in values]
                 rows.append(
                     {
-                        "row": row[0].row,
+                        "row": row_idx,
                         "values": ["" if value is None else str(value) for value in values],
                         "matches": matches,
                     }
