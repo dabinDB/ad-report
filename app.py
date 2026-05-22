@@ -88,7 +88,28 @@ def normalize_definition_location(definition: dict[str, Any], dictionary: Standa
         except ValueError:
             pass
     location["columns"] = fixed_columns
+    normalized["total_row"] = _normalize_summary_row(normalized.get("total_row"), "합계")
+    normalized["compare_row"] = _normalize_summary_row(normalized.get("compare_row"), "전월 비교")
     return normalized
+
+
+def _normalize_summary_row(value: Any, default_label: str) -> dict[str, Any]:
+    if isinstance(value, int):
+        return {"enabled": True, "row": value, "label": default_label}
+    if isinstance(value, dict):
+        row = value.get("row")
+        normalized = {
+            "enabled": bool(value.get("enabled", row is not None)),
+            "label": value.get("label", default_label),
+        }
+        if row:
+            normalized["row"] = int(row)
+        if value.get("position"):
+            normalized["position"] = value.get("position")
+        if value.get("mode"):
+            normalized["mode"] = value.get("mode")
+        return normalized
+    return {"enabled": False, "label": default_label}
 
 
 def _split_column_mapping(key: Any, value: Any) -> tuple[str | None, str | None]:
@@ -123,7 +144,7 @@ def definition_editor(definition: dict[str, Any], index: int, dictionary: Standa
         sort_options = edited["group_by"] + edited["metrics"]
         sort_default = sort.get("by") if sort.get("by") in sort_options else (sort_options[0] if sort_options else "")
         loc = edited.setdefault("location", {})
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         sort["by"] = c1.selectbox("정렬 기준", sort_options or [""], index=(sort_options or [""]).index(sort_default), key=f"sort_by_{index}")
         sort["order"] = c2.selectbox("정렬 순서", ["desc", "asc"], index=0 if sort.get("order", "desc") == "desc" else 1, key=f"sort_order_{index}")
         limit_value = c3.number_input("Limit", min_value=0, value=int(edited.get("limit") or 0), key=f"limit_{index}")
@@ -131,7 +152,23 @@ def definition_editor(definition: dict[str, Any], index: int, dictionary: Standa
             edited["limit"] = int(limit_value)
         else:
             edited.pop("limit", None)
-        edited.setdefault("total_row", {})["enabled"] = c4.checkbox("합계 행", value=bool(edited.get("total_row", {}).get("enabled")), key=f"total_{index}")
+
+        total_row = edited.setdefault("total_row", {"enabled": False, "label": "합계"})
+        compare_row = edited.setdefault("compare_row", {"enabled": False, "label": "전월 비교"})
+        r1, r2, r3, r4 = st.columns(4)
+        total_row["enabled"] = r1.checkbox("합계 행", value=bool(total_row.get("enabled")), key=f"total_{index}")
+        total_row_num = r2.number_input("합계 행 번호", min_value=0, value=int(total_row.get("row") or 0), key=f"total_row_{index}")
+        compare_row["enabled"] = r3.checkbox("비교 행", value=bool(compare_row.get("enabled")), key=f"compare_{index}")
+        compare_row_num = r4.number_input("비교 행 번호", min_value=0, value=int(compare_row.get("row") or 0), key=f"compare_row_{index}")
+        if total_row_num:
+            total_row["row"] = int(total_row_num)
+        else:
+            total_row.pop("row", None)
+        if compare_row_num:
+            compare_row["row"] = int(compare_row_num)
+            compare_row.setdefault("mode", "previous_row")
+        else:
+            compare_row.pop("row", None)
 
         st.caption("템플릿 위치")
         p1, p2, p3, p4, p5 = st.columns(5)

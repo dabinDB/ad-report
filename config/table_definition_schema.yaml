@@ -32,13 +32,27 @@ schema:
       type: array
       items: {type: string}
     total_row:
-      type: object
-      properties:
-        enabled: {type: boolean}
-        position:
-          type: string
-          enum: [top, bottom]
-        label: {type: string}
+      oneOf:
+        - type: integer
+        - type: object
+          properties:
+            enabled: {type: boolean}
+            row: {type: integer}
+            position:
+              type: string
+              enum: [top, bottom]
+            label: {type: string}
+    compare_row:
+      oneOf:
+        - type: integer
+        - type: object
+          properties:
+            enabled: {type: boolean}
+            row: {type: integer}
+            label: {type: string}
+            mode:
+              type: string
+              enum: [previous_row, previous_period]
     location:
       type: object
       required: [sheet, header_row, label_col, data_start_row, data_end_row, columns]

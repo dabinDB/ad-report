@@ -28,25 +28,46 @@ def fill_workbook(
         label_col_idx = column_index_from_string(label_col)
         metric_columns = normalize_metric_columns(location.get("columns", {}))
         group_by = definition.get("group_by", [])
+        total_spec = normalize_summary_row(definition.get("total_row"), "합계")
+        compare_spec = normalize_summary_row(definition.get("compare_row"), "전월 비교")
+        reserved_rows = {
+            row
+            for row in [total_spec.get("row"), compare_spec.get("row")]
+            if isinstance(row, int) and start_row <= row <= end_row
+        }
 
         _clear_range(sheet, start_row, end_row, [label_col, *metric_columns.keys()])
 
-        write_row = start_row
-        total_spec = definition.get("total_row", {})
-        if total_spec.get("enabled") and total_spec.get("position", "top") == "top":
+        if total_spec.get("enabled") and total_spec.get("row"):
             total = build_total_row(source_df, definition, dictionary)
+            sheet.cell(total_spec["row"], label_col_idx).value = total_spec.get("label", "합계")
+            _write_metric_cells(sheet, total_spec["row"], metric_columns, total)
+
+        if compare_spec.get("enabled") and compare_spec.get("row"):
+            compare_values = build_compare_row(result, definition, dictionary)
+            sheet.cell(compare_spec["row"], label_col_idx).value = compare_spec.get("label", "전월 비교")
+            _write_metric_cells(sheet, compare_spec["row"], metric_columns, compare_values)
+
+        write_row = start_row
+        if total_spec.get("enabled") and not total_spec.get("row") and total_spec.get("position", "top") == "top":
+            total = build_total_row(source_df, definition, dictionary)
+            write_row = _next_data_row(write_row, reserved_rows)
             sheet.cell(write_row, label_col_idx).value = total_spec.get("label", "합계")
             _write_metric_cells(sheet, write_row, metric_columns, total)
+            reserved_rows.add(write_row)
             write_row += 1
 
         for _, row in result.iterrows():
+            write_row = _next_data_row(write_row, reserved_rows)
             if write_row > end_row:
                 break
             sheet.cell(write_row, label_col_idx).value = _label_value(row, group_by)
             _write_metric_cells(sheet, write_row, metric_columns, row.to_dict())
             write_row += 1
 
-        if total_spec.get("enabled") and total_spec.get("position") == "bottom" and write_row <= end_row:
+        if total_spec.get("enabled") and not total_spec.get("row") and total_spec.get("position") == "bottom":
+            write_row = _next_data_row(write_row, reserved_rows)
+        if total_spec.get("enabled") and not total_spec.get("row") and total_spec.get("position") == "bottom" and write_row <= end_row:
             total = build_total_row(source_df, definition, dictionary)
             sheet.cell(write_row, label_col_idx).value = total_spec.get("label", "합계")
             _write_metric_cells(sheet, write_row, metric_columns, total)
@@ -66,6 +87,50 @@ def _write_metric_cells(sheet: Any, row: int, metric_columns: dict[str, str], va
     for column, metric in metric_columns.items():
         value = values.get(metric)
         sheet.cell(row, column_index_from_string(normalize_excel_column(column))).value = _scalar(value)
+
+
+def build_compare_row(result: pd.DataFrame, definition: dict[str, Any], dictionary: StandardDictionary) -> dict[str, Any]:
+    metrics = definition.get("metrics", [])
+    if len(result) < 2:
+        return {metric: None for metric in metrics}
+    current = result.iloc[0]
+    previous = result.iloc[1]
+    values: dict[str, Any] = {}
+    for metric in metrics:
+        current_value = _number(current.get(metric))
+        previous_value = _number(previous.get(metric))
+        diff = current_value - previous_value
+        spec = dictionary.metric_spec(metric)
+        if spec.get("unit") == "%" or spec.get("multiplier") == 100:
+            values[metric] = f"{diff:,.2f}%P"
+        else:
+            change = None if previous_value == 0 else diff / previous_value * 100
+            values[metric] = f"{diff:,.0f}" if change is None else f"{diff:,.0f}({change:,.2f}%)"
+    return values
+
+
+def normalize_summary_row(value: Any, default_label: str) -> dict[str, Any]:
+    if isinstance(value, int):
+        return {"enabled": True, "row": value, "label": default_label}
+    if isinstance(value, dict):
+        normalized = {
+            "enabled": bool(value.get("enabled", value.get("row") is not None)),
+            "label": value.get("label", default_label),
+        }
+        if value.get("row"):
+            normalized["row"] = int(value["row"])
+        if value.get("position"):
+            normalized["position"] = value["position"]
+        if value.get("mode"):
+            normalized["mode"] = value["mode"]
+        return normalized
+    return {"enabled": False, "label": default_label}
+
+
+def _next_data_row(row: int, reserved_rows: set[int]) -> int:
+    while row in reserved_rows:
+        row += 1
+    return row
 
 
 def normalize_metric_columns(columns: dict[Any, Any]) -> dict[str, str]:
@@ -103,3 +168,12 @@ def _scalar(value: Any) -> Any:
     if hasattr(value, "item"):
         return value.item()
     return value
+
+
+def _number(value: Any) -> float:
+    if pd.isna(value):
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0

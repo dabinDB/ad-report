@@ -30,6 +30,7 @@ def analyze_template(workbook_bytes: bytes, dictionary: StandardDictionary) -> l
             if not _looks_like_new_table(definitions, sheet.title, header_row):
                 continue
             definition = _definition_from_context(
+                sheet=sheet,
                 sheet_name=sheet.title,
                 title=title,
                 title_cell=title_cell,
@@ -59,7 +60,10 @@ def analyze_with_gemini(
     prompt = (
         "엑셀 광고 보고서 템플릿의 표 정의를 추출하세요. "
         "반드시 JSON 객체만 반환하세요. 최상위 키는 definitions 또는 tables 입니다. "
-        "각 표는 id, name, group_by, sort, limit, metrics, location, metadata를 포함합니다.\n\n"
+        "각 표는 id, name, group_by, sort, limit, metrics, location, metadata를 포함합니다. "
+        "헤더 아래에 합계/총계 행이 있으면 total_row.row에 행 번호를 넣고, "
+        "전월 비교/전주 비교/증감 행이 있으면 compare_row.row에 행 번호를 넣으세요. "
+        "location.data_start_row는 실제 상세 데이터가 시작되는 첫 행이어야 합니다.\n\n"
         f"표준 차원: {dictionary.dimension_names}\n"
         f"표준 지표: {dictionary.metric_names}\n"
         f"JSON Schema: {json.dumps(schema, ensure_ascii=False)}\n"
@@ -104,6 +108,7 @@ def extract_workbook_outline(workbook_bytes: bytes, dictionary: StandardDictiona
 
 
 def _definition_from_context(
+    sheet: Any,
     sheet_name: str,
     title: str,
     title_cell: str,
@@ -133,7 +138,9 @@ def _definition_from_context(
         metrics = list(metric_columns.values())
 
     safe_name = title.strip() or f"{sheet_name} {header_row}행 표"
-    data_start = header_row + 1
+    summary_rows = _detect_summary_rows(sheet, header_row, label_col)
+    fixed_summary_rows = [spec["row"] for spec in summary_rows.values() if spec.get("row")]
+    data_start = max([header_row + 1, *[row + 1 for row in fixed_summary_rows]])
     data_end = data_start + (limit - 1 if limit else 19)
 
     definition = {
@@ -142,7 +149,6 @@ def _definition_from_context(
         "group_by": group_by,
         "sort": {"by": sort_by, "order": "desc"},
         "metrics": metrics,
-        "total_row": {"enabled": not bool(limit), "position": "top", "label": "합계"},
         "location": {
             "sheet": sheet_name,
             "title_cell": title_cell,
@@ -154,6 +160,12 @@ def _definition_from_context(
         },
         "metadata": {"created_by": "ai", "ai_confidence": 0.72, "user_verified": False},
     }
+    if "total_row" in summary_rows:
+        definition["total_row"] = summary_rows["total_row"]
+    elif not limit:
+        definition["total_row"] = {"enabled": True, "position": "top", "label": "합계"}
+    if "compare_row" in summary_rows:
+        definition["compare_row"] = summary_rows["compare_row"]
     if limit:
         definition["limit"] = limit
     return definition
@@ -235,6 +247,29 @@ def _label_col(header_map: dict[str, str], group_by: list[str]) -> str:
         if name in group_by:
             return col
     return next(iter(header_map.keys()), "A")
+
+
+def _detect_summary_rows(sheet: Any, header_row: int, label_col: str) -> dict[str, dict[str, Any]]:
+    summary_rows: dict[str, dict[str, Any]] = {}
+    label_col_idx = 1
+    for cell in sheet[header_row]:
+        if get_column_letter(cell.column) == label_col:
+            label_col_idx = cell.column
+            break
+    for row in range(header_row + 1, min(header_row + 5, sheet.max_row or header_row) + 1):
+        value = sheet.cell(row, label_col_idx).value
+        text = "" if value is None else str(value).strip()
+        normalized = normalize_token(text)
+        if "합계" in normalized or "총계" in normalized:
+            summary_rows["total_row"] = {"enabled": True, "row": row, "label": text or "합계"}
+        elif "비교" in normalized or "전월" in normalized or "전주" in normalized or "증감" in normalized:
+            summary_rows["compare_row"] = {
+                "enabled": True,
+                "row": row,
+                "label": text or "전월 비교",
+                "mode": "previous_row",
+            }
+    return summary_rows
 
 
 def _looks_like_new_table(definitions: list[dict[str, Any]], sheet: str, header_row: int) -> bool:
