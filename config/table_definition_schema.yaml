@@ -31,6 +31,21 @@ schema:
     metrics:
       type: array
       items: {type: string}
+    source_type:
+      type: string
+      enum: [raw_table, pivot_formula, formula_table]
+    formula_policy:
+      type: string
+      enum: [preserve, overwrite]
+    formula_cells:
+      type: array
+      items:
+        type: object
+        properties:
+          cell: {type: string}
+          row: {type: integer}
+          column: {type: string}
+          formula: {type: string}
     total_row:
       oneOf:
         - type: integer

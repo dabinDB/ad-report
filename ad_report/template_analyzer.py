@@ -64,6 +64,8 @@ def analyze_with_gemini(
         "헤더 아래에 합계/총계 행이 있으면 total_row.row에 행 번호를 넣고, "
         "일평균/평균 행이 있으면 average_row.row에 행 번호를 넣고, "
         "전월 비교/전주 비교/증감 행이 있으면 compare_row.row에 행 번호를 넣으세요. "
+        "수식 셀이 있으면 formula_cells에 셀 주소/행/컬럼/수식을 넣고, "
+        "GETPIVOTDATA 수식이면 source_type='pivot_formula', formula_policy='preserve'로 설정하세요. "
         "location.data_start_row는 실제 상세 데이터가 시작되는 첫 행이어야 합니다.\n\n"
         f"표준 차원: {dictionary.dimension_names}\n"
         f"표준 지표: {dictionary.metric_names}\n"
@@ -97,11 +99,20 @@ def extract_workbook_outline(workbook_bytes: bytes, dictionary: StandardDictiona
             values = [cell.value for cell in row[:20]]
             if any(value is not None and str(value).strip() for value in values):
                 matches = [dictionary.match(value) for value in values]
+                formulas = [
+                    {
+                        "column": get_column_letter(cell.column),
+                        "formula": str(cell.value),
+                    }
+                    for cell in row[:20]
+                    if _is_formula(cell.value)
+                ]
                 rows.append(
                     {
                         "row": row_idx,
                         "values": ["" if value is None else str(value) for value in values],
                         "matches": matches,
+                        "formulas": formulas,
                     }
                 )
         outline.append({"sheet": sheet.title, "rows": rows})
@@ -143,6 +154,7 @@ def _definition_from_context(
     fixed_summary_rows = [spec["row"] for spec in summary_rows.values() if spec.get("row")]
     data_start = max([header_row + 1, *[row + 1 for row in fixed_summary_rows]])
     data_end = data_start + (limit - 1 if limit else 19)
+    formula_cells = _detect_formula_cells(sheet, header_row + 1, data_end, [label_col, *metric_columns.keys()])
 
     definition = {
         "id": _slugify(f"{sheet_name}_{safe_name}_{header_row}"),
@@ -161,6 +173,10 @@ def _definition_from_context(
         },
         "metadata": {"created_by": "ai", "ai_confidence": 0.72, "user_verified": False},
     }
+    if formula_cells:
+        definition["formula_cells"] = formula_cells
+        definition["formula_policy"] = "preserve"
+        definition["source_type"] = "pivot_formula" if any("GETPIVOTDATA" in cell["formula"].upper() for cell in formula_cells) else "formula_table"
     if "total_row" in summary_rows:
         definition["total_row"] = summary_rows["total_row"]
     if "average_row" in summary_rows:
@@ -280,6 +296,27 @@ def _detect_summary_rows(sheet: Any, header_row: int, label_col: str) -> dict[st
                 "mode": "previous_row",
             }
     return summary_rows
+
+
+def _detect_formula_cells(sheet: Any, start_row: int, end_row: int, columns: list[str]) -> list[dict[str, Any]]:
+    formula_cells = []
+    for row in range(start_row, min(end_row, sheet.max_row or end_row) + 1):
+        for column in columns:
+            cell = sheet[f"{column}{row}"]
+            if _is_formula(cell.value):
+                formula_cells.append(
+                    {
+                        "cell": cell.coordinate,
+                        "row": row,
+                        "column": column,
+                        "formula": str(cell.value),
+                    }
+                )
+    return formula_cells
+
+
+def _is_formula(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("=")
 
 
 def _looks_like_new_table(definitions: list[dict[str, Any]], sheet: str, header_row: int) -> bool:

@@ -28,6 +28,7 @@ def fill_workbook(
         label_col_idx = column_index_from_string(label_col)
         metric_columns = normalize_metric_columns(location.get("columns", {}))
         group_by = definition.get("group_by", [])
+        preserved_cells = formula_cells_to_preserve(definition)
         total_spec = normalize_summary_row(definition.get("total_row"), "합계")
         compare_spec = normalize_summary_row(definition.get("compare_row"), "전월 비교")
         average_spec = normalize_summary_row(definition.get("average_row"), "일평균")
@@ -37,29 +38,29 @@ def fill_workbook(
             if isinstance(row, int) and start_row <= row <= end_row
         }
 
-        _clear_range(sheet, start_row, end_row, [label_col, *metric_columns.keys()])
+        _clear_range(sheet, start_row, end_row, [label_col, *metric_columns.keys()], preserved_cells)
 
         if total_spec.get("enabled") and total_spec.get("row"):
             total = build_total_row(source_df, definition, dictionary)
-            sheet.cell(total_spec["row"], label_col_idx).value = total_spec.get("label", "합계")
-            _write_metric_cells(sheet, total_spec["row"], metric_columns, total)
+            _write_cell(sheet, total_spec["row"], label_col_idx, total_spec.get("label", "합계"), preserved_cells)
+            _write_metric_cells(sheet, total_spec["row"], metric_columns, total, preserved_cells)
 
         if average_spec.get("enabled") and average_spec.get("row"):
             average = build_average_row(source_df, result, definition, dictionary)
-            sheet.cell(average_spec["row"], label_col_idx).value = average_spec.get("label", "일평균")
-            _write_metric_cells(sheet, average_spec["row"], metric_columns, average)
+            _write_cell(sheet, average_spec["row"], label_col_idx, average_spec.get("label", "일평균"), preserved_cells)
+            _write_metric_cells(sheet, average_spec["row"], metric_columns, average, preserved_cells)
 
         if compare_spec.get("enabled") and compare_spec.get("row"):
             compare_values = build_compare_row(result, definition, dictionary)
-            sheet.cell(compare_spec["row"], label_col_idx).value = compare_spec.get("label", "전월 비교")
-            _write_metric_cells(sheet, compare_spec["row"], metric_columns, compare_values)
+            _write_cell(sheet, compare_spec["row"], label_col_idx, compare_spec.get("label", "전월 비교"), preserved_cells)
+            _write_metric_cells(sheet, compare_spec["row"], metric_columns, compare_values, preserved_cells)
 
         write_row = start_row
         if total_spec.get("enabled") and not total_spec.get("row") and total_spec.get("position", "top") == "top":
             total = build_total_row(source_df, definition, dictionary)
             write_row = _next_data_row(write_row, reserved_rows)
-            sheet.cell(write_row, label_col_idx).value = total_spec.get("label", "합계")
-            _write_metric_cells(sheet, write_row, metric_columns, total)
+            _write_cell(sheet, write_row, label_col_idx, total_spec.get("label", "합계"), preserved_cells)
+            _write_metric_cells(sheet, write_row, metric_columns, total, preserved_cells)
             reserved_rows.add(write_row)
             write_row += 1
 
@@ -67,32 +68,50 @@ def fill_workbook(
             write_row = _next_data_row(write_row, reserved_rows)
             if write_row > end_row:
                 break
-            sheet.cell(write_row, label_col_idx).value = _label_value(row, group_by)
-            _write_metric_cells(sheet, write_row, metric_columns, row.to_dict())
+            _write_cell(sheet, write_row, label_col_idx, _label_value(row, group_by), preserved_cells)
+            _write_metric_cells(sheet, write_row, metric_columns, row.to_dict(), preserved_cells)
             write_row += 1
 
         if total_spec.get("enabled") and not total_spec.get("row") and total_spec.get("position") == "bottom":
             write_row = _next_data_row(write_row, reserved_rows)
         if total_spec.get("enabled") and not total_spec.get("row") and total_spec.get("position") == "bottom" and write_row <= end_row:
             total = build_total_row(source_df, definition, dictionary)
-            sheet.cell(write_row, label_col_idx).value = total_spec.get("label", "합계")
-            _write_metric_cells(sheet, write_row, metric_columns, total)
+            _write_cell(sheet, write_row, label_col_idx, total_spec.get("label", "합계"), preserved_cells)
+            _write_metric_cells(sheet, write_row, metric_columns, total, preserved_cells)
 
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
 
 
-def _clear_range(sheet: Any, start_row: int, end_row: int, columns: list[str]) -> None:
+def _clear_range(sheet: Any, start_row: int, end_row: int, columns: list[str], preserved_cells: set[str]) -> None:
     for row in range(start_row, end_row + 1):
         for column in columns:
-            sheet.cell(row, column_index_from_string(normalize_excel_column(column))).value = None
+            column_idx = column_index_from_string(normalize_excel_column(column))
+            _write_cell(sheet, row, column_idx, None, preserved_cells)
 
 
-def _write_metric_cells(sheet: Any, row: int, metric_columns: dict[str, str], values: dict[str, Any]) -> None:
+def _write_metric_cells(sheet: Any, row: int, metric_columns: dict[str, str], values: dict[str, Any], preserved_cells: set[str]) -> None:
     for column, metric in metric_columns.items():
         value = values.get(metric)
-        sheet.cell(row, column_index_from_string(normalize_excel_column(column))).value = _scalar(value)
+        _write_cell(sheet, row, column_index_from_string(normalize_excel_column(column)), _scalar(value), preserved_cells)
+
+
+def _write_cell(sheet: Any, row: int, column_idx: int, value: Any, preserved_cells: set[str]) -> None:
+    cell = sheet.cell(row, column_idx)
+    if cell.coordinate in preserved_cells:
+        return
+    cell.value = value
+
+
+def formula_cells_to_preserve(definition: dict[str, Any]) -> set[str]:
+    if definition.get("formula_policy", "overwrite") != "preserve":
+        return set()
+    return {
+        str(cell.get("cell"))
+        for cell in definition.get("formula_cells", [])
+        if cell.get("cell")
+    }
 
 
 def build_compare_row(result: pd.DataFrame, definition: dict[str, Any], dictionary: StandardDictionary) -> dict[str, Any]:
