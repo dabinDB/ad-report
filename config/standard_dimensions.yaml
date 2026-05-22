@@ -1,0 +1,153 @@
+version: "1.0"
+
+time_dimensions:
+  날짜:
+    data_type: date
+    derive_from: null
+    synonyms: [날짜, 일자, date, day, 리포트일자, 광고일자]
+    default_sort: desc
+  주차:
+    data_type: string
+    derive_from: 날짜
+    derive_rule: week_start_monday
+    synonyms: [주차, 주간, week]
+    default_sort: desc
+  월:
+    data_type: string
+    derive_from: 날짜
+    derive_rule: month
+    synonyms: [월, 월별, month]
+    default_sort: desc
+  요일:
+    data_type: string
+    derive_from: 날짜
+    derive_rule: weekday_kr
+    enum: [월, 화, 수, 목, 금, 토, 일]
+    synonyms: [요일, weekday, day_of_week]
+    default_sort: custom
+
+categorical_dimensions:
+  매체:
+    data_type: string
+    synonyms: [매체, 매체명, media, platform, 광고매체, channel]
+    default_sort: by_metric
+  캠페인:
+    data_type: string
+    synonyms: [캠페인, 캠페인명, campaign, campaign_name]
+    default_sort: by_metric
+  광고그룹:
+    data_type: string
+    synonyms: [광고그룹, 광고그룹명, ad_group, adgroup, 그룹명]
+    default_sort: by_metric
+  키워드:
+    data_type: string
+    synonyms: [키워드, 검색어, keyword, search_term, query]
+    default_sort: by_metric
+  소재:
+    data_type: string
+    synonyms: [소재, 소재명, creative, ad_creative, 광고소재, 크리에이티브]
+    default_sort: by_metric
+  기기:
+    data_type: string
+    synonyms: [기기, 디바이스, device, device_type, 단말]
+    enum: [PC, 모바일, 태블릿]
+    value_mapping:
+      Desktop: PC
+      desktop: PC
+      Mobile: 모바일
+      mobile: 모바일
+      Tablet: 태블릿
+      MO: 모바일
+    default_sort: by_metric
+  지역:
+    data_type: string
+    synonyms: [지역, region, location, 지역명]
+    default_sort: by_metric
+  연령:
+    data_type: string
+    synonyms: [연령, 연령대, age, age_group]
+    enum: [10대, 20대, 30대, 40대, 50대, 60대 이상]
+    default_sort: asc
+  성별:
+    data_type: string
+    synonyms: [성별, gender, sex]
+    enum: [남성, 여성, 기타]
+    value_mapping:
+      M: 남성
+      F: 여성
+      Male: 남성
+      Female: 여성
+    default_sort: by_metric
+
+metrics:
+  노출수:
+    data_type: integer
+    aggregation: sum
+    synonyms: [노출수, 노출, impression, impressions, imp, 광고노출횟수, 노출횟수]
+    format: "{:,}"
+  클릭수:
+    data_type: integer
+    aggregation: sum
+    synonyms: [클릭수, 클릭, click, clicks, 광고클릭수]
+    format: "{:,}"
+  총비용:
+    data_type: integer
+    aggregation: sum
+    synonyms: [총비용, 비용, 광고비, cost, spend, 광고비용, 집행금액]
+    format: "{:,}"
+  전환수:
+    data_type: integer
+    aggregation: sum
+    synonyms: [전환수, 전환, conversion, conversions, cv]
+    format: "{:,}"
+  전환매출액:
+    data_type: integer
+    aggregation: sum
+    synonyms: [전환매출액, 매출, 매출액, revenue, conversion_value, 전환금액]
+    format: "{:,}"
+  클릭률:
+    data_type: float
+    aggregation: weighted_avg
+    numerator: 클릭수
+    denominator: 노출수
+    multiplier: 100
+    synonyms: [클릭률, 클릭율, CTR, ctr, click_rate, click_through_rate]
+    format: "{:.2f}"
+  평균클릭비용:
+    data_type: float
+    aggregation: weighted_avg
+    numerator: 총비용
+    denominator: 클릭수
+    multiplier: 1
+    synonyms: [평균클릭비용, CPC, cpc, 평균CPC, 클릭당비용, cost_per_click]
+    format: "{:,.0f}"
+  전환율:
+    data_type: float
+    aggregation: weighted_avg
+    numerator: 전환수
+    denominator: 클릭수
+    multiplier: 100
+    synonyms: [전환율, CVR, cvr, conversion_rate]
+    format: "{:.2f}"
+  전환당비용:
+    data_type: float
+    aggregation: weighted_avg
+    numerator: 총비용
+    denominator: 전환수
+    multiplier: 1
+    synonyms: [전환당비용, 전환단가, CPA, cpa, cost_per_action]
+    format: "{:,.0f}"
+  광고수익률:
+    data_type: float
+    aggregation: weighted_avg
+    numerator: 전환매출액
+    denominator: 총비용
+    multiplier: 100
+    synonyms: [광고수익률, 광고수익율, ROAS, roas, return_on_ad_spend]
+    format: "{:.2f}"
+
+sort_rules:
+  asc: {description: 오름차순}
+  desc: {description: 내림차순}
+  by_metric: {description: 지정 지표 기준 정렬}
+  custom: {description: 사전 정의 순서}

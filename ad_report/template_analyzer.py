@@ -1,0 +1,251 @@
+from __future__ import annotations
+
+import json
+import re
+from io import BytesIO
+from typing import Any
+
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+
+from .dictionary import StandardDictionary, normalize_token
+
+
+TITLE_HINTS = ("top", "데이터", "성과", "요약", "분석", "키워드", "매체", "기기", "소재", "캠페인")
+
+
+def analyze_template(workbook_bytes: bytes, dictionary: StandardDictionary) -> list[dict[str, Any]]:
+    workbook = load_workbook(BytesIO(workbook_bytes), data_only=False)
+    definitions: list[dict[str, Any]] = []
+
+    for sheet in workbook.worksheets:
+        max_row = sheet.max_row or 1
+        for row in range(1, max_row + 1):
+            title = _row_text(sheet, row)
+            header_row = _find_header_row(sheet, row, dictionary)
+            if not header_row:
+                continue
+            title_cell = _first_non_empty_cell(sheet, row)
+            header_map = _header_map(sheet, header_row, dictionary)
+            if not _looks_like_new_table(definitions, sheet.title, header_row):
+                continue
+            definition = _definition_from_context(
+                sheet_name=sheet.title,
+                title=title,
+                title_cell=title_cell,
+                header_row=header_row,
+                header_map=header_map,
+                dictionary=dictionary,
+            )
+            definitions.append(definition)
+
+    return definitions
+
+
+def analyze_with_openai(
+    workbook_bytes: bytes,
+    dictionary: StandardDictionary,
+    schema: dict[str, Any],
+    api_key: str,
+    model: str,
+) -> list[dict[str, Any]]:
+    try:
+        from openai import OpenAI
+    except Exception:
+        return analyze_template(workbook_bytes, dictionary)
+
+    compact = extract_workbook_outline(workbook_bytes, dictionary)
+    client = OpenAI(api_key=api_key)
+    prompt = {
+        "role": "user",
+        "content": (
+            "엑셀 광고 보고서 템플릿의 표 정의를 추출하세요. "
+            "반드시 JSON 배열만 반환하세요. 각 원소는 id, name, group_by, sort, "
+            "limit, metrics, location, metadata를 포함합니다.\n\n"
+            f"표준 차원: {dictionary.dimension_names}\n"
+            f"표준 지표: {dictionary.metric_names}\n"
+            f"JSON Schema: {json.dumps(schema, ensure_ascii=False)}\n"
+            f"Workbook outline: {json.dumps(compact, ensure_ascii=False)}"
+        ),
+    }
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[prompt],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        content = response.choices[0].message.content or "{}"
+        parsed = json.loads(content)
+        if isinstance(parsed, dict):
+            return parsed.get("tables", parsed.get("definitions", []))
+        if isinstance(parsed, list):
+            return parsed
+    except Exception:
+        return analyze_template(workbook_bytes, dictionary)
+    return analyze_template(workbook_bytes, dictionary)
+
+
+def extract_workbook_outline(workbook_bytes: bytes, dictionary: StandardDictionary) -> list[dict[str, Any]]:
+    workbook = load_workbook(BytesIO(workbook_bytes), data_only=False, read_only=True)
+    outline = []
+    for sheet in workbook.worksheets:
+        rows = []
+        for row in sheet.iter_rows(max_row=min(sheet.max_row or 1, 120), values_only=False):
+            values = [cell.value for cell in row[:20]]
+            if any(value is not None and str(value).strip() for value in values):
+                matches = [dictionary.match(value) for value in values]
+                rows.append(
+                    {
+                        "row": row[0].row,
+                        "values": ["" if value is None else str(value) for value in values],
+                        "matches": matches,
+                    }
+                )
+        outline.append({"sheet": sheet.title, "rows": rows})
+    return outline
+
+
+def _definition_from_context(
+    sheet_name: str,
+    title: str,
+    title_cell: str,
+    header_row: int,
+    header_map: dict[str, str],
+    dictionary: StandardDictionary,
+) -> dict[str, Any]:
+    dimensions = [value for value in header_map.values() if dictionary.is_dimension(value)]
+    metrics = [value for value in header_map.values() if dictionary.is_metric(value)]
+    title_matches = _matches_in_text(title, dictionary)
+
+    group_by = [match for match in title_matches if dictionary.is_dimension(match)]
+    if not group_by and dimensions:
+        group_by = [dimensions[0]]
+    if not group_by:
+        group_by = ["매체"]
+
+    limit = _infer_limit(title)
+    sort_by = _infer_sort(title, metrics, group_by, dictionary)
+    label_col = _label_col(header_map, group_by)
+    metric_columns = {
+        col: name
+        for col, name in header_map.items()
+        if dictionary.is_metric(name) and col != label_col
+    }
+    if not metrics:
+        metrics = list(metric_columns.values())
+
+    safe_name = title.strip() or f"{sheet_name} {header_row}행 표"
+    data_start = header_row + 1
+    data_end = data_start + (limit - 1 if limit else 19)
+
+    return {
+        "id": _slugify(f"{sheet_name}_{safe_name}_{header_row}"),
+        "name": safe_name,
+        "group_by": group_by,
+        "sort": {"by": sort_by, "order": "desc"},
+        "limit": limit,
+        "metrics": metrics,
+        "total_row": {"enabled": not bool(limit), "position": "top", "label": "합계"},
+        "location": {
+            "sheet": sheet_name,
+            "title_cell": title_cell,
+            "header_row": header_row,
+            "label_col": label_col,
+            "data_start_row": data_start,
+            "data_end_row": data_end,
+            "columns": metric_columns,
+        },
+        "metadata": {"created_by": "ai", "ai_confidence": 0.72, "user_verified": False},
+    }
+
+
+def _row_text(sheet: Any, row: int) -> str:
+    values = [
+        str(cell.value).strip()
+        for cell in sheet[row]
+        if cell.value is not None and str(cell.value).strip()
+    ]
+    return " ".join(values)
+
+
+def _first_non_empty_cell(sheet: Any, row: int) -> str:
+    for cell in sheet[row]:
+        if cell.value is not None and str(cell.value).strip():
+            return cell.coordinate
+    return f"A{row}"
+
+
+def _find_header_row(sheet: Any, row: int, dictionary: StandardDictionary) -> int | None:
+    title = _row_text(sheet, row)
+    if not title:
+        return row if _is_header_row(sheet, row, dictionary) else None
+    if title and not any(hint in normalize_token(title) for hint in TITLE_HINTS):
+        matches = _matches_in_text(title, dictionary)
+        if not matches:
+            return None
+
+    for candidate in range(row, min(row + 5, sheet.max_row or row) + 1):
+        if _is_header_row(sheet, candidate, dictionary):
+            return candidate
+    return None
+
+
+def _is_header_row(sheet: Any, row: int, dictionary: StandardDictionary) -> bool:
+    header_map = _header_map(sheet, row, dictionary)
+    metric_count = sum(1 for value in header_map.values() if dictionary.is_metric(value))
+    dimension_count = sum(1 for value in header_map.values() if dictionary.is_dimension(value))
+    return (metric_count >= 1 and dimension_count >= 1) or metric_count >= 2
+
+
+def _header_map(sheet: Any, row: int, dictionary: StandardDictionary) -> dict[str, str]:
+    mapping = {}
+    for cell in sheet[row]:
+        match = dictionary.match(cell.value)
+        if match:
+            mapping[get_column_letter(cell.column)] = match
+    return mapping
+
+
+def _matches_in_text(text: str, dictionary: StandardDictionary) -> list[str]:
+    matches = []
+    normalized = normalize_token(text)
+    for name in [*dictionary.dimension_names, *dictionary.metric_names]:
+        tokens = [name, *dictionary.dimensions.get(name, {}).get("synonyms", []), *dictionary.metrics.get(name, {}).get("synonyms", [])]
+        if any(normalize_token(token) in normalized for token in tokens):
+            matches.append(name)
+    return matches
+
+
+def _infer_limit(title: str) -> int | None:
+    match = re.search(r"(?:top|TOP|상위)\s*([0-9]+)", title)
+    return int(match.group(1)) if match else None
+
+
+def _infer_sort(title: str, metrics: list[str], group_by: list[str], dictionary: StandardDictionary) -> str:
+    title_matches = [match for match in _matches_in_text(title, dictionary) if dictionary.is_metric(match)]
+    if title_matches:
+        return title_matches[0]
+    if metrics:
+        return metrics[0]
+    return group_by[0]
+
+
+def _label_col(header_map: dict[str, str], group_by: list[str]) -> str:
+    for col, name in header_map.items():
+        if name in group_by:
+            return col
+    return next(iter(header_map.keys()), "A")
+
+
+def _looks_like_new_table(definitions: list[dict[str, Any]], sheet: str, header_row: int) -> bool:
+    for definition in definitions:
+        location = definition.get("location", {})
+        if location.get("sheet") == sheet and abs(location.get("header_row", 0) - header_row) < 3:
+            return False
+    return True
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^0-9a-zA-Z가-힣]+", "_", value).strip("_").lower()
+    return slug or "table_definition"

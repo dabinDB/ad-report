@@ -1,0 +1,101 @@
+version: "1.0"
+
+schema:
+  type: object
+  required: [id, name, group_by, metrics, location]
+  properties:
+    id: {type: string}
+    name: {type: string}
+    description: {type: string}
+    group_by:
+      type: array
+      items: {type: string}
+    sort:
+      type: object
+      properties:
+        by: {type: string}
+        order:
+          type: string
+          enum: [asc, desc]
+    limit: {type: integer}
+    filters:
+      type: array
+      items:
+        type: object
+        properties:
+          field: {type: string}
+          operator:
+            type: string
+            enum: ["==", "!=", ">", "<", ">=", "<=", in, not_in]
+          value: {}
+    metrics:
+      type: array
+      items: {type: string}
+    total_row:
+      type: object
+      properties:
+        enabled: {type: boolean}
+        position:
+          type: string
+          enum: [top, bottom]
+        label: {type: string}
+    location:
+      type: object
+      required: [sheet, header_row, label_col, data_start_row, data_end_row, columns]
+      properties:
+        sheet: {type: string}
+        title_cell: {type: string}
+        header_row: {type: integer}
+        label_col: {type: string}
+        data_start_row: {type: integer}
+        data_end_row: {type: integer}
+        columns:
+          type: object
+          additionalProperties: {type: string}
+    metadata:
+      type: object
+
+table_library:
+  by_media_summary:
+    id: by_media_summary
+    name: 매체별 데이터
+    group_by: [매체]
+    sort: {by: 총비용, order: desc}
+    metrics: [노출수, 클릭수, 클릭률, 평균클릭비용, 총비용, 전환수, 전환율, 전환매출액, 전환당비용, 광고수익률]
+    total_row: {enabled: true, position: top, label: 합계}
+  by_date_summary:
+    id: by_date_summary
+    name: 일자별 데이터
+    group_by: [날짜]
+    sort: {by: 날짜, order: desc}
+    metrics: [노출수, 클릭수, 클릭률, 평균클릭비용, 총비용, 전환수, 전환율, 전환매출액]
+    total_row: {enabled: true, position: top, label: 합계}
+  top10_keywords_by_impression:
+    id: top10_keywords_by_impression
+    name: 노출수 TOP10 키워드
+    group_by: [키워드]
+    sort: {by: 노출수, order: desc}
+    limit: 10
+    metrics: [노출수, 클릭수, 클릭률, 총비용, 전환수, 전환율]
+    total_row: {enabled: false}
+  by_device_summary:
+    id: by_device_summary
+    name: 기기별 데이터
+    group_by: [기기]
+    sort: {by: 노출수, order: desc}
+    metrics: [노출수, 클릭수, 클릭률, 평균클릭비용, 총비용, 전환수, 전환율]
+    total_row: {enabled: true, position: top, label: 합계}
+  by_creative_summary:
+    id: by_creative_summary
+    name: 소재별 데이터
+    group_by: [소재]
+    sort: {by: 노출수, order: desc}
+    metrics: [노출수, 클릭수, 클릭률, 총비용, 전환수, 전환매출액, 광고수익률]
+    total_row: {enabled: true, position: top, label: 합계}
+
+validation_rules:
+  - rule: group_by_must_exist
+  - rule: metrics_must_exist
+  - rule: sort_field_must_be_valid
+  - rule: limit_with_total_row_warning
+  - rule: weekday_sort_must_be_custom
