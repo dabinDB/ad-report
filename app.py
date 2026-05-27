@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import json
 from io import BytesIO
 from pathlib import Path
@@ -19,6 +20,7 @@ from ad_report.workbook_writer import fill_workbook, normalize_excel_column
 ROOT = Path(__file__).parent
 STANDARD_DIMENSIONS_PATH = ROOT / "config" / "standard_dimensions.yaml"
 TABLE_SCHEMA_PATH = ROOT / "config" / "table_definition_schema.yaml"
+GEMINI_TIMEOUT_SECONDS = 25
 
 
 st.set_page_config(page_title="AI 광고 보고서 생성기", page_icon="bar_chart", layout="wide")
@@ -56,11 +58,33 @@ def analyze_definitions(
     api_key: str,
     model: str,
 ) -> list[dict[str, Any]]:
+    local_definitions = analyze_template(template_bytes, dictionary)
+    definitions = local_definitions
     if use_gemini and api_key:
-        definitions = analyze_with_gemini(template_bytes, dictionary, schema, api_key, model)
-    else:
-        definitions = analyze_template(template_bytes, dictionary)
+        gemini_definitions = _run_gemini_with_timeout(template_bytes, dictionary, schema, api_key, model)
+        if gemini_definitions:
+            definitions = gemini_definitions
     return [normalize_definition_location(definition, dictionary) for definition in definitions]
+
+
+def _run_gemini_with_timeout(
+    template_bytes: bytes,
+    dictionary: StandardDictionary,
+    schema: dict[str, Any],
+    api_key: str,
+    model: str,
+) -> list[dict[str, Any]]:
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(analyze_with_gemini, template_bytes, dictionary, schema, api_key, model)
+    try:
+        return future.result(timeout=GEMINI_TIMEOUT_SECONDS)
+    except TimeoutError:
+        future.cancel()
+        return []
+    except Exception:
+        return []
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def normalize_definition_location(definition: dict[str, Any], dictionary: StandardDictionary) -> dict[str, Any]:
@@ -220,7 +244,7 @@ def main() -> None:
 
     with st.sidebar:
         st.header("설정")
-        use_gemini = st.toggle("Gemini로 템플릿 분석", value=True)
+        use_gemini = st.toggle("Gemini 보조 분석 사용", value=False)
         api_key = st.secrets.get("GEMINI_API_KEY", "")
         model = st.secrets.get("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
         if api_key:
@@ -228,6 +252,7 @@ def main() -> None:
         else:
             st.warning("GEMINI_API_KEY가 없으면 휴리스틱 분석으로 동작합니다.")
         st.caption(f"Model: `{model}`")
+        st.caption("기본은 빠른 로컬 분석입니다. Gemini는 제한 시간 안에 성공할 때만 결과를 대체합니다.")
         st.divider()
         st.download_button(
             "표준 차원 사전 다운로드",

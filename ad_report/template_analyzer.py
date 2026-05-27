@@ -94,7 +94,7 @@ def extract_workbook_outline(workbook_bytes: bytes, dictionary: StandardDictiona
     outline = []
     for sheet in workbook.worksheets:
         rows = []
-        max_row = min(sheet.max_row or 1, 120)
+        max_row = min(sheet.max_row or 1, 80)
         for row_idx, row in enumerate(sheet.iter_rows(max_row=max_row, values_only=False), start=1):
             values = [cell.value for cell in row[:20]]
             if any(value is not None and str(value).strip() for value in values):
@@ -112,7 +112,7 @@ def extract_workbook_outline(workbook_bytes: bytes, dictionary: StandardDictiona
                         "row": row_idx,
                         "values": ["" if value is None else str(value) for value in values],
                         "matches": matches,
-                        "formulas": formulas,
+                        "formulas": formulas[:5],
                     }
                 )
         outline.append({"sheet": sheet.title, "rows": rows})
@@ -309,7 +309,7 @@ def _detect_formula_cells(sheet: Any, start_row: int, end_row: int, columns: lis
                         "cell": cell.coordinate,
                         "row": row,
                         "column": column,
-                        "formula": str(cell.value),
+                        "formula": _truncate_formula(str(cell.value)),
                     }
                 )
     return formula_cells
@@ -317,6 +317,10 @@ def _detect_formula_cells(sheet: Any, start_row: int, end_row: int, columns: lis
 
 def _is_formula(value: Any) -> bool:
     return isinstance(value, str) and value.startswith("=")
+
+
+def _truncate_formula(formula: str, max_length: int = 240) -> str:
+    return formula if len(formula) <= max_length else f"{formula[:max_length]}..."
 
 
 def _looks_like_new_table(definitions: list[dict[str, Any]], sheet: str, header_row: int) -> bool:
