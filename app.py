@@ -159,6 +159,34 @@ def _is_average_label(label: Any) -> bool:
     return "평균" in str(label or "")
 
 
+def group_definitions_by_sheet(
+    definitions: list[dict[str, Any]],
+    sheet_names: list[str] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {sheet: [] for sheet in sheet_names or []}
+    for definition in definitions:
+        sheet = definition.get("location", {}).get("sheet", "시트 미지정")
+        grouped.setdefault(sheet, []).append(definition)
+    return grouped
+
+
+def render_sheet_definition_json(
+    definitions: list[dict[str, Any]],
+    sheet_names: list[str] | None = None,
+) -> None:
+    grouped = group_definitions_by_sheet(definitions, sheet_names)
+    if not grouped:
+        st.info("분석 결과가 없습니다.")
+        return
+    tabs = st.tabs([f"{sheet} ({len(items)})" for sheet, items in grouped.items()])
+    for tab, (sheet, items) in zip(tabs, grouped.items()):
+        with tab:
+            st.code(
+                json.dumps({"sheet": sheet, "definitions": items}, ensure_ascii=False, indent=2),
+                language="json",
+            )
+
+
 def definition_editor(definition: dict[str, Any], index: int, dictionary: StandardDictionary) -> dict[str, Any]:
     edited = normalize_definition_location(definition, dictionary)
     with st.expander(f"{index + 1}. {definition.get('name', '표 정의')}", expanded=index == 0):
@@ -289,6 +317,17 @@ def main() -> None:
             )
         else:
             analysis_selected_sheets = []
+        if analysis_template is not None:
+            analysis_signature = (
+                analysis_template.name,
+                getattr(analysis_template, "size", None),
+                tuple(analysis_selected_sheets),
+            )
+            if st.session_state.get("analysis_signature") != analysis_signature:
+                st.session_state.pop("analysis_definitions", None)
+                st.session_state.pop("analysis_result_sheets", None)
+        else:
+            analysis_signature = None
         analyze_clicked = st.button("템플릿 분석하기", type="primary", disabled=analysis_template is None)
         if analyze_clicked and analysis_template is None:
             st.error("분석할 엑셀 템플릿을 먼저 업로드하세요.")
@@ -305,12 +344,17 @@ def main() -> None:
                     model,
                     analysis_selected_sheets,
                 )
+                st.session_state.analysis_signature = analysis_signature
+                st.session_state.analysis_result_sheets = list(analysis_selected_sheets)
 
         analysis_definitions = st.session_state.get("analysis_definitions")
         if analysis_definitions:
             st.success(f"표 정의 {len(analysis_definitions)}개를 찾았습니다.")
-            with st.expander("템플릿 분석 결과 JSON", expanded=True):
-                st.code(json.dumps(analysis_definitions, ensure_ascii=False, indent=2), language="json")
+            with st.expander("시트별 템플릿 분석 결과 JSON", expanded=True):
+                render_sheet_definition_json(
+                    analysis_definitions,
+                    st.session_state.get("analysis_result_sheets"),
+                )
         else:
             st.info("템플릿만 먼저 분석해 표 위치와 구성요소를 확인할 수 있습니다.")
 
@@ -356,6 +400,7 @@ def main() -> None:
             )
             if st.session_state.get("report_signature") != report_signature:
                 st.session_state.pop("report_definitions", None)
+                st.session_state.pop("report_result_sheets", None)
 
         review_clicked = st.button("표 정의 검수 시작", type="primary", disabled=not ready_for_review)
         if review_clicked and not ready_for_review:
@@ -372,6 +417,7 @@ def main() -> None:
                     report_selected_sheets,
                 )
                 st.session_state.report_signature = report_signature
+                st.session_state.report_result_sheets = list(report_selected_sheets)
 
         if not ready_for_review:
             st.info("템플릿, 분석할 시트, 원본 데이터를 모두 준비하면 표 정의 검수와 보고서 생성이 가능합니다.")
@@ -398,8 +444,11 @@ def main() -> None:
             return
 
         st.subheader("템플릿 분석 결과 스키마")
-        with st.expander("템플릿 분석 결과 JSON", expanded=False):
-            st.code(json.dumps(report_definitions, ensure_ascii=False, indent=2), language="json")
+        with st.expander("시트별 템플릿 분석 결과 JSON", expanded=False):
+            render_sheet_definition_json(
+                report_definitions,
+                st.session_state.get("report_result_sheets"),
+            )
 
         st.subheader("표 정의 검수")
         edited_definitions = []
