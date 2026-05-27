@@ -12,7 +12,7 @@ import yaml
 
 from ad_report.aggregation import aggregate_table, build_source_mapping_schema, normalize_source_dataframe
 from ad_report.dictionary import StandardDictionary, load_yaml
-from ad_report.template_analyzer import analyze_template, analyze_with_gemini
+from ad_report.template_analyzer import analyze_template, analyze_with_gemini, list_workbook_sheets
 from ad_report.validation import validate_definition
 from ad_report.workbook_writer import fill_workbook, normalize_excel_column
 
@@ -57,11 +57,12 @@ def analyze_definitions(
     use_gemini: bool,
     api_key: str,
     model: str,
+    sheet_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    local_definitions = analyze_template(template_bytes, dictionary)
+    local_definitions = analyze_template(template_bytes, dictionary, sheet_names)
     definitions = local_definitions
     if use_gemini and api_key:
-        gemini_definitions = _run_gemini_with_timeout(template_bytes, dictionary, schema, api_key, model)
+        gemini_definitions = _run_gemini_with_timeout(template_bytes, dictionary, schema, api_key, model, sheet_names)
         if gemini_definitions:
             definitions = gemini_definitions
     return [normalize_definition_location(definition, dictionary) for definition in definitions]
@@ -73,18 +74,22 @@ def _run_gemini_with_timeout(
     schema: dict[str, Any],
     api_key: str,
     model: str,
+    sheet_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(analyze_with_gemini, template_bytes, dictionary, schema, api_key, model)
-    try:
-        return future.result(timeout=GEMINI_TIMEOUT_SECONDS)
-    except TimeoutError:
-        future.cancel()
-        return []
-    except Exception:
-        return []
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+    definitions: list[dict[str, Any]] = []
+    batches = [[sheet_name] for sheet_name in sheet_names] if sheet_names else [None]
+    for batch in batches:
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(analyze_with_gemini, template_bytes, dictionary, schema, api_key, model, batch)
+        try:
+            definitions.extend(future.result(timeout=GEMINI_TIMEOUT_SECONDS))
+        except TimeoutError:
+            future.cancel()
+        except Exception:
+            pass
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+    return definitions
 
 
 def normalize_definition_location(definition: dict[str, Any], dictionary: StandardDictionary) -> dict[str, Any]:
@@ -272,9 +277,23 @@ def main() -> None:
             type=["xlsx"],
             key="analysis_template_file",
         )
+        analysis_sheet_names = []
+        if analysis_template is not None:
+            analysis_sheet_names = list_workbook_sheets(analysis_template.getvalue())
+            default_sheets = analysis_sheet_names[:1] if analysis_sheet_names else []
+            analysis_selected_sheets = st.multiselect(
+                "분석할 시트",
+                analysis_sheet_names,
+                default=default_sheets,
+                key="analysis_selected_sheets",
+            )
+        else:
+            analysis_selected_sheets = []
         analyze_clicked = st.button("템플릿 분석하기", type="primary", disabled=analysis_template is None)
         if analyze_clicked and analysis_template is None:
             st.error("분석할 엑셀 템플릿을 먼저 업로드하세요.")
+        elif analyze_clicked and not analysis_selected_sheets:
+            st.error("분석할 시트를 하나 이상 선택하세요.")
         elif analyze_clicked:
             with st.spinner("템플릿 구조를 분석하는 중입니다..."):
                 st.session_state.analysis_definitions = analyze_definitions(
@@ -284,6 +303,7 @@ def main() -> None:
                     use_gemini,
                     api_key,
                     model,
+                    analysis_selected_sheets,
                 )
 
         analysis_definitions = st.session_state.get("analysis_definitions")
@@ -301,6 +321,18 @@ def main() -> None:
             type=["xlsx"],
             key="report_template_file",
         )
+        report_sheet_names = []
+        if report_template_file is not None:
+            report_sheet_names = list_workbook_sheets(report_template_file.getvalue())
+            report_default_sheets = report_sheet_names[:1] if report_sheet_names else []
+            report_selected_sheets = st.multiselect(
+                "보고서 생성에 사용할 템플릿 시트",
+                report_sheet_names,
+                default=report_default_sheets,
+                key="report_selected_sheets",
+            )
+        else:
+            report_selected_sheets = []
         source_file = st.file_uploader(
             "원본 매체 데이터",
             type=["xlsx", "csv", "tsv"],
@@ -312,12 +344,13 @@ def main() -> None:
             help="원본 데이터에 매체 컬럼이 없으면 이 값이 매체 기준으로 사용됩니다.",
         )
 
-        ready_for_review = report_template_file is not None and source_file is not None
+        ready_for_review = report_template_file is not None and source_file is not None and bool(report_selected_sheets)
         report_signature = None
         if ready_for_review:
             report_signature = (
                 report_template_file.name,
                 getattr(report_template_file, "size", None),
+                tuple(report_selected_sheets),
                 source_file.name,
                 getattr(source_file, "size", None),
             )
@@ -326,7 +359,7 @@ def main() -> None:
 
         review_clicked = st.button("표 정의 검수 시작", type="primary", disabled=not ready_for_review)
         if review_clicked and not ready_for_review:
-            st.error("보고서 생성용 템플릿과 원본 매체 데이터를 모두 업로드하세요.")
+            st.error("보고서 생성용 템플릿, 분석할 시트, 원본 매체 데이터를 모두 선택하세요.")
         elif review_clicked:
             with st.spinner("보고서용 템플릿을 분석하는 중입니다..."):
                 st.session_state.report_definitions = analyze_definitions(
@@ -336,11 +369,12 @@ def main() -> None:
                     use_gemini,
                     api_key,
                     model,
+                    report_selected_sheets,
                 )
                 st.session_state.report_signature = report_signature
 
         if not ready_for_review:
-            st.info("템플릿과 원본 데이터를 모두 업로드하면 표 정의 검수와 보고서 생성이 가능합니다.")
+            st.info("템플릿, 분석할 시트, 원본 데이터를 모두 준비하면 표 정의 검수와 보고서 생성이 가능합니다.")
             show_library(table_config)
             return
 

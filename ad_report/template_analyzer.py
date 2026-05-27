@@ -12,14 +12,27 @@ from .dictionary import StandardDictionary, normalize_token
 
 
 TITLE_HINTS = ("top", "데이터", "성과", "요약", "분석", "키워드", "매체", "기기", "소재", "캠페인")
+MAX_SCAN_ROWS = 500
 
 
-def analyze_template(workbook_bytes: bytes, dictionary: StandardDictionary) -> list[dict[str, Any]]:
+def list_workbook_sheets(workbook_bytes: bytes) -> list[str]:
+    workbook = load_workbook(BytesIO(workbook_bytes), read_only=True)
+    return workbook.sheetnames
+
+
+def analyze_template(
+    workbook_bytes: bytes,
+    dictionary: StandardDictionary,
+    sheet_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
     workbook = load_workbook(BytesIO(workbook_bytes), data_only=False)
     definitions: list[dict[str, Any]] = []
+    selected_sheets = set(sheet_names or workbook.sheetnames)
 
     for sheet in workbook.worksheets:
-        max_row = sheet.max_row or 1
+        if sheet.title not in selected_sheets:
+            continue
+        max_row = min(sheet.max_row or 1, MAX_SCAN_ROWS)
         for row in range(1, max_row + 1):
             title = _row_text(sheet, row)
             header_row = _find_header_row(sheet, row, dictionary)
@@ -49,15 +62,38 @@ def analyze_with_gemini(
     schema: dict[str, Any],
     api_key: str,
     model: str,
+    sheet_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     try:
         from google import genai
     except Exception:
-        return analyze_template(workbook_bytes, dictionary)
+        return analyze_template(workbook_bytes, dictionary, sheet_names)
 
-    compact = extract_workbook_outline(workbook_bytes, dictionary)
     client = genai.Client(api_key=api_key)
-    prompt = (
+    definitions: list[dict[str, Any]] = []
+    for sheet_outline in extract_workbook_outline(workbook_bytes, dictionary, sheet_names):
+        prompt = _gemini_prompt(dictionary, schema, [sheet_outline])
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config={"temperature": 0, "response_mime_type": "application/json"},
+            )
+            content = response.text or "{}"
+            parsed = json.loads(content)
+            if isinstance(parsed, dict):
+                definitions.extend(parsed.get("tables", parsed.get("definitions", [])))
+            elif isinstance(parsed, list):
+                definitions.extend(parsed)
+        except Exception:
+            continue
+    if definitions:
+        return definitions
+    return analyze_template(workbook_bytes, dictionary, sheet_names)
+
+
+def _gemini_prompt(dictionary: StandardDictionary, schema: dict[str, Any], outline: list[dict[str, Any]]) -> str:
+    return (
         "엑셀 광고 보고서 템플릿의 표 정의를 추출하세요. "
         "반드시 JSON 객체만 반환하세요. 최상위 키는 definitions 또는 tables 입니다. "
         "각 표는 id, name, group_by, sort, limit, metrics, location, metadata를 포함합니다. "
@@ -70,29 +106,21 @@ def analyze_with_gemini(
         f"표준 차원: {dictionary.dimension_names}\n"
         f"표준 지표: {dictionary.metric_names}\n"
         f"JSON Schema: {json.dumps(schema, ensure_ascii=False)}\n"
-        f"Workbook outline: {json.dumps(compact, ensure_ascii=False)}"
+        f"Workbook outline: {json.dumps(outline, ensure_ascii=False)}"
     )
-    try:
-        response = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config={"temperature": 0, "response_mime_type": "application/json"},
-        )
-        content = response.text or "{}"
-        parsed = json.loads(content)
-        if isinstance(parsed, dict):
-            return parsed.get("tables", parsed.get("definitions", []))
-        if isinstance(parsed, list):
-            return parsed
-    except Exception:
-        return analyze_template(workbook_bytes, dictionary)
-    return analyze_template(workbook_bytes, dictionary)
 
 
-def extract_workbook_outline(workbook_bytes: bytes, dictionary: StandardDictionary) -> list[dict[str, Any]]:
+def extract_workbook_outline(
+    workbook_bytes: bytes,
+    dictionary: StandardDictionary,
+    sheet_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
     workbook = load_workbook(BytesIO(workbook_bytes), data_only=False, read_only=True)
     outline = []
+    selected_sheets = set(sheet_names or workbook.sheetnames)
     for sheet in workbook.worksheets:
+        if sheet.title not in selected_sheets:
+            continue
         rows = []
         max_row = min(sheet.max_row or 1, 80)
         for row_idx, row in enumerate(sheet.iter_rows(max_row=max_row, values_only=False), start=1):
