@@ -6,7 +6,7 @@ from io import BytesIO
 from typing import Any
 
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, range_boundaries
 
 from .dictionary import StandardDictionary, normalize_token
 
@@ -100,7 +100,7 @@ def _gemini_prompt(dictionary: StandardDictionary, schema: dict[str, Any], outli
         "헤더 아래에 합계/총계 행이 있으면 total_row.row에 행 번호를 넣고, "
         "일평균/평균 행이 있으면 average_row.row에 행 번호를 넣고, "
         "전월 비교/전주 비교/증감 행이 있으면 compare_row.row에 행 번호를 넣으세요. "
-        "수식 셀이 있으면 formula_cells에 셀 주소/행/컬럼/수식을 넣고, "
+        "수식 셀이 있으면 formula_ranges에 범위/샘플 수식만 압축해서 넣고, "
         "GETPIVOTDATA 수식이면 source_type='pivot_formula', formula_policy='preserve'로 설정하세요. "
         "location.data_start_row는 실제 상세 데이터가 시작되는 첫 행이어야 합니다.\n\n"
         f"표준 차원: {dictionary.dimension_names}\n"
@@ -182,7 +182,7 @@ def _definition_from_context(
     fixed_summary_rows = [spec["row"] for spec in summary_rows.values() if spec.get("row")]
     data_start = max([header_row + 1, *[row + 1 for row in fixed_summary_rows]])
     data_end = data_start + (limit - 1 if limit else 19)
-    formula_cells = _detect_formula_cells(sheet, header_row + 1, data_end, [label_col, *metric_columns.keys()])
+    formula_ranges = _detect_formula_ranges(sheet, header_row + 1, data_end, [label_col, *metric_columns.keys()])
 
     definition = {
         "id": _slugify(f"{sheet_name}_{safe_name}_{header_row}"),
@@ -201,10 +201,10 @@ def _definition_from_context(
         },
         "metadata": {"created_by": "ai", "ai_confidence": 0.72, "user_verified": False},
     }
-    if formula_cells:
-        definition["formula_cells"] = formula_cells
+    if formula_ranges:
+        definition["formula_ranges"] = formula_ranges
         definition["formula_policy"] = "preserve"
-        definition["source_type"] = "pivot_formula" if any("GETPIVOTDATA" in cell["formula"].upper() for cell in formula_cells) else "formula_table"
+        definition["source_type"] = "pivot_formula" if any(item["formula_type"] == "GETPIVOTDATA" for item in formula_ranges) else "formula_table"
     if "total_row" in summary_rows:
         definition["total_row"] = summary_rows["total_row"]
     if "average_row" in summary_rows:
@@ -326,13 +326,13 @@ def _detect_summary_rows(sheet: Any, header_row: int, label_col: str) -> dict[st
     return summary_rows
 
 
-def _detect_formula_cells(sheet: Any, start_row: int, end_row: int, columns: list[str]) -> list[dict[str, Any]]:
-    formula_cells = []
+def _detect_formula_ranges(sheet: Any, start_row: int, end_row: int, columns: list[str]) -> list[dict[str, Any]]:
+    formulas_by_column: dict[str, list[dict[str, Any]]] = {}
     for row in range(start_row, min(end_row, sheet.max_row or end_row) + 1):
         for column in columns:
             cell = sheet[f"{column}{row}"]
             if _is_formula(cell.value):
-                formula_cells.append(
+                formulas_by_column.setdefault(column, []).append(
                     {
                         "cell": cell.coordinate,
                         "row": row,
@@ -340,11 +340,74 @@ def _detect_formula_cells(sheet: Any, start_row: int, end_row: int, columns: lis
                         "formula": _truncate_formula(str(cell.value)),
                     }
                 )
-    return formula_cells
+    ranges = []
+    for column, cells in formulas_by_column.items():
+        for group in _contiguous_formula_groups(cells):
+            first = group[0]
+            last = group[-1]
+            address = f"{column}{first['row']}:{column}{last['row']}" if len(group) > 1 else first["cell"]
+            ranges.append(
+                {
+                    "range": address,
+                    "rows": f"{first['row']}:{last['row']}",
+                    "columns": [column],
+                    "formula_type": _formula_type(first["formula"]),
+                    "sample_formula": first["formula"],
+                    "cell_count": len(group),
+                }
+            )
+    return _merge_formula_ranges_by_rows(ranges)
+
+
+def _contiguous_formula_groups(cells: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    if not cells:
+        return []
+    groups = [[cells[0]]]
+    for cell in cells[1:]:
+        if cell["row"] == groups[-1][-1]["row"] + 1:
+            groups[-1].append(cell)
+        else:
+            groups.append([cell])
+    return groups
+
+
+def _merge_formula_ranges_by_rows(ranges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in ranges:
+        key = (item["rows"], item["formula_type"], _relative_formula_signature(item["sample_formula"]))
+        if key not in merged:
+            merged[key] = {**item, "columns": list(item["columns"])}
+        else:
+            merged[key]["columns"].extend(item["columns"])
+            merged[key]["cell_count"] += item["cell_count"]
+    output = []
+    for item in merged.values():
+        columns = sorted(item["columns"], key=lambda col: range_boundaries(f"{col}1:{col}1")[0])
+        start_row, end_row = item["rows"].split(":")
+        if len(columns) == 1:
+            item["range"] = f"{columns[0]}{start_row}:{columns[0]}{end_row}" if start_row != end_row else f"{columns[0]}{start_row}"
+        else:
+            item["range"] = f"{columns[0]}{start_row}:{columns[-1]}{end_row}"
+        item["columns"] = columns
+        output.append(item)
+    return output
 
 
 def _is_formula(value: Any) -> bool:
     return isinstance(value, str) and value.startswith("=")
+
+
+def _formula_type(formula: str) -> str:
+    upper = formula.upper()
+    if "GETPIVOTDATA" in upper:
+        return "GETPIVOTDATA"
+    if "!" in formula:
+        return "cross_sheet_formula"
+    return "row_formula"
+
+
+def _relative_formula_signature(formula: str) -> str:
+    return re.sub(r"\d+", "#", formula.upper())
 
 
 def _truncate_formula(formula: str, max_length: int = 240) -> str:

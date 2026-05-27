@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.utils import column_index_from_string, get_column_letter
+from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 
 from .aggregation import aggregate_table, build_total_row
 from .dictionary import StandardDictionary
@@ -107,10 +107,26 @@ def _write_cell(sheet: Any, row: int, column_idx: int, value: Any, preserved_cel
 def formula_cells_to_preserve(definition: dict[str, Any]) -> set[str]:
     if definition.get("formula_policy", "overwrite") != "preserve":
         return set()
-    return {
+    cells = {
         str(cell.get("cell"))
         for cell in definition.get("formula_cells", [])
         if cell.get("cell")
+    }
+    for formula_range in definition.get("formula_ranges", []):
+        address = formula_range.get("range")
+        if address:
+            cells.update(_cells_in_range(address))
+    return cells
+
+
+def _cells_in_range(address: str) -> set[str]:
+    if ":" not in address:
+        return {address}
+    min_col, min_row, max_col, max_row = range_boundaries(address)
+    return {
+        f"{get_column_letter(column)}{row}"
+        for row in range(min_row, max_row + 1)
+        for column in range(min_col, max_col + 1)
     }
 
 

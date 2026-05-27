@@ -46,6 +46,19 @@ schema:
           row: {type: integer}
           column: {type: string}
           formula: {type: string}
+    formula_ranges:
+      type: array
+      items:
+        type: object
+        properties:
+          range: {type: string}
+          rows: {type: string}
+          columns:
+            type: array
+            items: {type: string}
+          formula_type: {type: string}
+          sample_formula: {type: string}
+          cell_count: {type: integer}
     total_row:
       oneOf:
         - type: integer
