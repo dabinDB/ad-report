@@ -402,6 +402,8 @@ def main() -> None:
             if st.session_state.get("report_signature") != report_signature:
                 st.session_state.pop("report_definitions", None)
                 st.session_state.pop("report_result_sheets", None)
+                st.session_state.pop("generated_report_bytes", None)
+                st.session_state.pop("generated_report_error", None)
 
         review_clicked = st.button("표 정의 검수 시작", type="primary", disabled=not ready_for_review)
         if review_clicked and not ready_for_review:
@@ -513,26 +515,39 @@ def main() -> None:
 
         generation_blocked = bool(all_errors) and not pivot_only_ready
         if st.button("완성 보고서 생성", type="primary", disabled=generation_blocked):
-            with st.spinner("템플릿 서식을 보존하며 데이터를 채우는 중입니다..."):
-                output_bytes = template_bytes
-                if pivot_update_enabled and selected_pivot_source:
-                    output_bytes = update_pivot_source_data(
-                        output_bytes,
-                        source_df,
-                        selected_pivot_source,
-                        pivot_update_mode,
-                        dictionary,
-                    )
-                if not skip_direct_fill:
-                    output_bytes = fill_workbook(output_bytes, source_df, edited_definitions, dictionary)
-                if pivot_sources:
-                    output_bytes = enable_pivot_refresh_on_load(output_bytes)
-            st.success("보고서 생성이 완료되었습니다.")
+            st.session_state.pop("generated_report_bytes", None)
+            st.session_state.pop("generated_report_error", None)
+            try:
+                with st.spinner("템플릿 서식을 보존하며 데이터를 채우는 중입니다..."):
+                    output_bytes = template_bytes
+                    if pivot_update_enabled and selected_pivot_source:
+                        output_bytes = update_pivot_source_data(
+                            output_bytes,
+                            source_df,
+                            selected_pivot_source,
+                            pivot_update_mode,
+                            dictionary,
+                        )
+                    if not skip_direct_fill:
+                        output_bytes = fill_workbook(output_bytes, source_df, edited_definitions, dictionary)
+                    if pivot_sources:
+                        output_bytes = enable_pivot_refresh_on_load(output_bytes)
+                st.session_state.generated_report_bytes = output_bytes
+            except Exception as exc:
+                st.session_state.generated_report_error = str(exc)
+
+        if st.session_state.get("generated_report_error"):
+            st.error(f"보고서 생성 중 오류가 발생했습니다: {st.session_state.generated_report_error}")
+
+        if st.session_state.get("generated_report_bytes"):
+            output_bytes = st.session_state.generated_report_bytes
+            st.success(f"보고서 생성이 완료되었습니다. 파일 크기: {len(output_bytes) / 1024 / 1024:.2f} MB")
             st.download_button(
                 "완성된 엑셀 보고서 다운로드",
                 data=output_bytes,
                 file_name="completed_ad_report.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                on_click="ignore",
             )
 
 
