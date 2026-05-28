@@ -12,6 +12,7 @@ import yaml
 
 from ad_report.aggregation import aggregate_table, build_source_mapping_schema, normalize_source_dataframe
 from ad_report.dictionary import StandardDictionary, load_yaml
+from ad_report.pivot import detect_pivot_sources, enable_pivot_refresh_on_load, update_pivot_source_data
 from ad_report.template_analyzer import analyze_template, analyze_with_gemini, list_workbook_sheets
 from ad_report.validation import validate_definition
 from ad_report.workbook_writer import fill_workbook, normalize_excel_column
@@ -428,6 +429,7 @@ def main() -> None:
         source_raw = apply_uploaded_media_name(read_source_file(source_file), media_name, dictionary)
         source_mapping_schema = build_source_mapping_schema(source_raw, dictionary)
         source_df = normalize_source_dataframe(source_raw, dictionary)
+        pivot_sources = detect_pivot_sources(template_bytes)
 
         st.subheader("원본 매핑 스키마")
         mapping_df = pd.DataFrame(source_mapping_schema)
@@ -438,45 +440,85 @@ def main() -> None:
         st.subheader("정규화된 원본 데이터 미리보기")
         st.dataframe(source_df.head(20), use_container_width=True)
 
+        pivot_update_enabled = False
+        skip_direct_fill = False
+        pivot_update_mode = "replace"
+        selected_pivot_source = None
+        if pivot_sources:
+            st.subheader("피벗 소스 데이터 갱신")
+            st.dataframe(pd.DataFrame(pivot_sources), use_container_width=True)
+            pivot_update_enabled = st.checkbox("피벗 소스 데이터 갱신 사용", value=True)
+            skip_direct_fill = st.checkbox("표 직접 채우기 건너뛰기", value=True)
+            selected_display = st.selectbox(
+                "갱신할 피벗 소스",
+                [source["display"] for source in pivot_sources],
+            )
+            selected_pivot_source = next(
+                source for source in pivot_sources if source["display"] == selected_display
+            )
+            pivot_update_mode_label = st.radio(
+                "소스 데이터 처리 방식",
+                ["교체", "행 추가"],
+                horizontal=True,
+            )
+            pivot_update_mode = "replace" if pivot_update_mode_label == "교체" else "append"
+            st.caption("피벗 정의는 유지하고, 파일을 열 때 피벗이 자동 새로고침되도록 설정합니다.")
+
         report_definitions = st.session_state.get("report_definitions")
-        if not report_definitions:
+        pivot_only_ready = bool(pivot_sources and pivot_update_enabled and skip_direct_fill and selected_pivot_source)
+        if not report_definitions and not pivot_only_ready:
             st.warning("먼저 `표 정의 검수 시작` 버튼을 눌러 템플릿 표 정의를 추출하세요.")
             return
-
-        st.subheader("템플릿 분석 결과 스키마")
-        with st.expander("시트별 템플릿 분석 결과 JSON", expanded=False):
-            render_sheet_definition_json(
-                report_definitions,
-                st.session_state.get("report_result_sheets"),
-            )
-
-        st.subheader("표 정의 검수")
         edited_definitions = []
         all_errors = []
-        for idx, definition in enumerate(report_definitions):
-            edited = definition_editor(definition, idx, dictionary)
-            errors, warnings = validate_definition(edited, schema, dictionary)
-            for error in errors:
-                st.error(f"{edited.get('name')}: {error}")
-            for warning in warnings:
-                st.warning(f"{edited.get('name')}: {warning}")
-            all_errors.extend(errors)
-            edited_definitions.append(edited)
+        if report_definitions:
+            st.subheader("템플릿 분석 결과 스키마")
+            with st.expander("시트별 템플릿 분석 결과 JSON", expanded=False):
+                render_sheet_definition_json(
+                    report_definitions,
+                    st.session_state.get("report_result_sheets"),
+                )
 
-        st.subheader("집계 결과 미리보기")
-        preview_tabs = st.tabs([definition.get("name", f"표 {idx + 1}") for idx, definition in enumerate(edited_definitions)])
-        for tab, definition in zip(preview_tabs, edited_definitions):
-            with tab:
-                try:
-                    result = aggregate_table(source_df, definition, dictionary)
-                    st.dataframe(result, use_container_width=True)
-                except Exception as exc:
-                    st.error(str(exc))
-                    all_errors.append(str(exc))
+            st.subheader("표 정의 검수")
+            for idx, definition in enumerate(report_definitions):
+                edited = definition_editor(definition, idx, dictionary)
+                errors, warnings = validate_definition(edited, schema, dictionary)
+                for error in errors:
+                    st.error(f"{edited.get('name')}: {error}")
+                for warning in warnings:
+                    st.warning(f"{edited.get('name')}: {warning}")
+                all_errors.extend(errors)
+                edited_definitions.append(edited)
 
-        if st.button("완성 보고서 생성", type="primary", disabled=bool(all_errors)):
+            st.subheader("집계 결과 미리보기")
+            preview_tabs = st.tabs([definition.get("name", f"표 {idx + 1}") for idx, definition in enumerate(edited_definitions)])
+            for tab, definition in zip(preview_tabs, edited_definitions):
+                with tab:
+                    try:
+                        result = aggregate_table(source_df, definition, dictionary)
+                        st.dataframe(result, use_container_width=True)
+                    except Exception as exc:
+                        st.error(str(exc))
+                        all_errors.append(str(exc))
+        else:
+            st.info("피벗 소스 데이터만 갱신하는 모드입니다. 표 직접 채우기와 표 정의 검수는 건너뜁니다.")
+
+        generation_blocked = bool(all_errors) and not pivot_only_ready
+        if st.button("완성 보고서 생성", type="primary", disabled=generation_blocked):
             with st.spinner("템플릿 서식을 보존하며 데이터를 채우는 중입니다..."):
-                output_bytes = fill_workbook(template_bytes, source_df, edited_definitions, dictionary)
+                output_bytes = template_bytes
+                if pivot_update_enabled and selected_pivot_source:
+                    output_bytes = update_pivot_source_data(
+                        output_bytes,
+                        source_df,
+                        selected_pivot_source,
+                        pivot_update_mode,
+                        dictionary,
+                    )
+                if not skip_direct_fill:
+                    output_bytes = fill_workbook(output_bytes, source_df, edited_definitions, dictionary)
+                if pivot_sources:
+                    output_bytes = enable_pivot_refresh_on_load(output_bytes)
             st.success("보고서 생성이 완료되었습니다.")
             st.download_button(
                 "완성된 엑셀 보고서 다운로드",
