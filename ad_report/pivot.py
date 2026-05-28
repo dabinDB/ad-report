@@ -99,6 +99,39 @@ def enable_pivot_refresh_on_load(workbook_bytes: bytes) -> bytes:
     return output_buffer.getvalue()
 
 
+def strip_pivot_cache_records(workbook_bytes: bytes) -> bytes:
+    input_buffer = BytesIO(workbook_bytes)
+    output_buffer = BytesIO()
+    empty_records = (
+        b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        b'<pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="0"/>'
+    )
+    with ZipFile(input_buffer, "r") as source_zip, ZipFile(output_buffer, "w", ZIP_DEFLATED) as target_zip:
+        for item in source_zip.infolist():
+            data = source_zip.read(item.filename)
+            if item.filename.startswith("xl/pivotCache/pivotCacheRecords") and item.filename.endswith(".xml"):
+                data = empty_records
+            elif item.filename.startswith("xl/pivotCache/") and item.filename.endswith(".xml"):
+                data = _set_pivot_refresh_attributes(data)
+            elif item.filename.startswith("xl/pivotTables/") and item.filename.endswith(".xml"):
+                data = _set_pivot_refresh_attributes(data)
+            target_zip.writestr(item, data)
+    return output_buffer.getvalue()
+
+
+def _set_pivot_refresh_attributes(data: bytes) -> bytes:
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return data
+    root.set("refreshOnLoad", "1")
+    root.set("enableRefresh", "1")
+    root.set("saveData", "0")
+    if root.tag.endswith("pivotCacheDefinition"):
+        root.set("recordCount", "0")
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
 def _source_display(sheet: str | None, ref: str | None, source_name: str | None) -> str:
     if sheet and ref:
         return f"{sheet}!{ref}"

@@ -11,7 +11,12 @@ import yaml
 
 from ad_report.aggregation import aggregate_table, build_source_mapping_schema, normalize_source_dataframe
 from ad_report.dictionary import StandardDictionary, load_yaml
-from ad_report.pivot import detect_pivot_sources, enable_pivot_refresh_on_load, update_pivot_source_data
+from ad_report.pivot import (
+    detect_pivot_sources,
+    enable_pivot_refresh_on_load,
+    strip_pivot_cache_records,
+    update_pivot_source_data,
+)
 from ad_report.template_analyzer import analyze_template, analyze_with_gemini, list_workbook_sheets
 from ad_report.validation import validate_definition
 from ad_report.workbook_writer import fill_workbook, normalize_excel_column
@@ -450,6 +455,7 @@ def main() -> None:
 
         pivot_update_enabled = False
         skip_direct_fill = False
+        strip_pivot_cache = False
         pivot_update_mode = "replace"
         selected_pivot_source = None
         if pivot_sources:
@@ -457,6 +463,7 @@ def main() -> None:
             st.dataframe(pd.DataFrame(pivot_sources), use_container_width=True)
             pivot_update_enabled = st.checkbox("피벗 소스 데이터 갱신 사용", value=True)
             skip_direct_fill = st.checkbox("표 직접 채우기 건너뛰기", value=True)
+            strip_pivot_cache = st.checkbox("피벗 캐시 제거 후 엑셀에서 새로고침", value=True)
             selected_display = st.selectbox(
                 "갱신할 피벗 소스",
                 [source["display"] for source in pivot_sources],
@@ -518,6 +525,8 @@ def main() -> None:
             try:
                 with st.spinner("템플릿 서식을 보존하며 데이터를 채우는 중입니다..."):
                     output_bytes = template_bytes
+                    if pivot_sources and strip_pivot_cache:
+                        output_bytes = strip_pivot_cache_records(output_bytes)
                     if pivot_update_enabled and selected_pivot_source:
                         output_bytes = update_pivot_source_data(
                             output_bytes,
@@ -528,7 +537,9 @@ def main() -> None:
                         )
                     if not skip_direct_fill:
                         output_bytes = fill_workbook(output_bytes, source_df, edited_definitions, dictionary)
-                    if pivot_sources:
+                    if pivot_sources and strip_pivot_cache:
+                        output_bytes = strip_pivot_cache_records(output_bytes)
+                    elif pivot_sources:
                         output_bytes = enable_pivot_refresh_on_load(output_bytes)
             except Exception as exc:
                 st.session_state.generated_report_error = str(exc)
