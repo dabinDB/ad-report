@@ -429,7 +429,12 @@ def main() -> None:
         source_raw = apply_uploaded_media_name(read_source_file(source_file), media_name, dictionary)
         source_mapping_schema = build_source_mapping_schema(source_raw, dictionary)
         source_df = normalize_source_dataframe(source_raw, dictionary)
-        pivot_sources = detect_pivot_sources(template_bytes)
+        try:
+            pivot_sources = detect_pivot_sources(template_bytes)
+            pivot_source_error = ""
+        except Exception as exc:
+            pivot_sources = []
+            pivot_source_error = str(exc)
 
         st.subheader("원본 매핑 스키마")
         mapping_df = pd.DataFrame(source_mapping_schema)
@@ -439,6 +444,9 @@ def main() -> None:
 
         st.subheader("정규화된 원본 데이터 미리보기")
         st.dataframe(source_df.head(20), use_container_width=True)
+
+        if pivot_source_error:
+            st.warning(f"피벗 소스 감지 중 오류가 있어 피벗 갱신 UI를 건너뜁니다: {pivot_source_error}")
 
         pivot_update_enabled = False
         skip_direct_fill = False
