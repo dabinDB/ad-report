@@ -78,7 +78,7 @@ def update_pivot_source_data(
 
     output = BytesIO()
     workbook.save(output)
-    return enable_pivot_refresh_on_load(output.getvalue())
+    return output.getvalue()
 
 
 def enable_pivot_refresh_on_load(workbook_bytes: bytes) -> bytes:
