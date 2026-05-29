@@ -195,15 +195,20 @@ def _align_to_pivot_headers(
     dictionary: StandardDictionary,
 ) -> pd.DataFrame:
     aligned = pd.DataFrame()
+    matched_count = 0
     for header in headers:
         header_text = str(header).strip()
         standard_name = dictionary.match(header_text) or header_text
         if header_text in source_df.columns:
             aligned[header_text] = source_df[header_text]
+            matched_count += 1
         elif standard_name in source_df.columns:
             aligned[header_text] = source_df[standard_name]
+            matched_count += 1
         else:
             aligned[header_text] = None
+    if headers and matched_count == 0:
+        raise ValueError("피벗 소스 헤더와 원본 데이터 컬럼이 하나도 매칭되지 않았습니다.")
     return aligned
 
 

@@ -55,6 +55,14 @@ def apply_uploaded_media_name(df: pd.DataFrame, media_name: str, dictionary: Sta
     return output
 
 
+def build_pivot_source_dataframe(source_raw: pd.DataFrame, source_df: pd.DataFrame) -> pd.DataFrame:
+    output = source_df.copy()
+    for column in source_raw.columns:
+        if column not in output.columns:
+            output[column] = source_raw[column]
+    return output
+
+
 def analyze_definitions(
     template_bytes: bytes,
     dictionary: StandardDictionary,
@@ -434,6 +442,7 @@ def main() -> None:
         source_raw = apply_uploaded_media_name(read_source_file(source_file), media_name, dictionary)
         source_mapping_schema = build_source_mapping_schema(source_raw, dictionary)
         source_df = normalize_source_dataframe(source_raw, dictionary)
+        pivot_source_df = build_pivot_source_dataframe(source_raw, source_df)
         try:
             pivot_sources = detect_pivot_sources(template_bytes)
             pivot_source_error = ""
@@ -530,7 +539,7 @@ def main() -> None:
                     if pivot_update_enabled and selected_pivot_source:
                         output_bytes = update_pivot_source_data(
                             output_bytes,
-                            source_df,
+                            pivot_source_df,
                             selected_pivot_source,
                             pivot_update_mode,
                             dictionary,
