@@ -73,19 +73,26 @@ def update_pivot_source_data(
         sheet_path = _sheet_path_for_name(source_zip, sheet_name)
         shared_strings = _shared_strings(source_zip)
         sheet_root = ET.fromstring(source_zip.read(sheet_path))
-        headers = _headers_from_sheet(sheet_root, header_row, min_col, max_col, shared_strings)
-        aligned = _align_to_pivot_headers(source_df, headers, dictionary)
-        first_data_row = header_row + 1
-        write_row = first_data_row if mode == "replace" else _last_row_in_columns(sheet_root, min_col, max_col) + 1
+        if mode == "replace":
+            aligned = _raw_sheet_dataframe(source_df)
+            max_col = min_col + len(aligned.columns) - 1
+            first_write_row = header_row
+            write_row = header_row
+            old_last_row = max(max_row, _last_row_in_columns(sheet_root, min_col, max_col))
+        else:
+            headers = _headers_from_sheet(sheet_root, header_row, min_col, max_col, shared_strings)
+            aligned = _align_to_pivot_headers(source_df, headers, dictionary)
+            first_write_row = header_row + 1
+            write_row = _last_row_in_columns(sheet_root, min_col, max_col) + 1
+            old_last_row = write_row - 1
         new_last_row = write_row + len(aligned) - 1 if len(aligned) else write_row - 1
-        old_last_row = max_row if mode == "replace" else write_row - 1
         new_ref = f"{get_column_letter(min_col)}{header_row}:{get_column_letter(max_col)}{max(new_last_row, header_row)}"
         updated_sheet_xml = _replace_sheet_rows(
             sheet_root,
             aligned,
             min_col,
             max_col,
-            first_data_row,
+            first_write_row,
             old_last_row,
             write_row,
             mode,
@@ -210,6 +217,12 @@ def _align_to_pivot_headers(
     if headers and matched_count == 0:
         raise ValueError("피벗 소스 헤더와 원본 데이터 컬럼이 하나도 매칭되지 않았습니다.")
     return aligned
+
+
+def _raw_sheet_dataframe(source_df: pd.DataFrame) -> pd.DataFrame:
+    header = pd.DataFrame([list(source_df.columns)], columns=source_df.columns)
+    values = source_df.reset_index(drop=True)
+    return pd.concat([header, values], ignore_index=True)
 
 
 def _sheet_path_for_name(archive: ZipFile, sheet_name: str) -> str:

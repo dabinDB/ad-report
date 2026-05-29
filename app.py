@@ -56,10 +56,10 @@ def apply_uploaded_media_name(df: pd.DataFrame, media_name: str, dictionary: Sta
 
 
 def build_pivot_source_dataframe(source_raw: pd.DataFrame, source_df: pd.DataFrame) -> pd.DataFrame:
-    output = source_df.copy()
-    for column in source_raw.columns:
+    output = source_raw.copy()
+    for column in source_df.columns:
         if column not in output.columns:
-            output[column] = source_raw[column]
+            output[column] = source_df[column]
     return output
 
 
