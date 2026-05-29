@@ -113,8 +113,6 @@ def strip_pivot_cache_records(workbook_bytes: bytes) -> bytes:
                 data = empty_records
             elif item.filename.startswith("xl/pivotCache/") and item.filename.endswith(".xml"):
                 data = _set_pivot_refresh_attributes(data)
-            elif item.filename.startswith("xl/pivotTables/") and item.filename.endswith(".xml"):
-                data = _set_pivot_refresh_attributes(data)
             target_zip.writestr(item, data)
     return output_buffer.getvalue()
 
