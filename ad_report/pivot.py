@@ -35,14 +35,17 @@ def detect_pivot_sources(workbook_bytes: bytes) -> list[dict[str, Any]]:
             ref = worksheet_source.attrib.get("ref")
             sheet = worksheet_source.attrib.get("sheet")
             source_name = worksheet_source.attrib.get("name")
+            effective_ref = _effective_source_ref(archive, sheet, ref)
             sources.append(
                 {
                     "id": f"pivot_cache_{index}",
                     "cache_definition": path,
                     "sheet": sheet,
-                    "ref": ref,
+                    "ref": effective_ref,
+                    "original_ref": ref,
                     "name": source_name,
-                    "display": _source_display(sheet, ref, source_name),
+                    "display": _source_display(sheet, effective_ref, source_name),
+                    "row_count": _source_row_count(effective_ref),
                     "refresh_on_load": root.attrib.get("refreshOnLoad") == "1",
                 }
             )
@@ -154,6 +157,36 @@ def _source_display(sheet: str | None, ref: str | None, source_name: str | None)
     if source_name:
         return source_name
     return "피벗 소스 범위 미확인"
+
+
+def _effective_source_ref(archive: ZipFile, sheet_name: str | None, ref: str | None) -> str | None:
+    if not sheet_name or not ref:
+        return ref
+    try:
+        min_col, min_row, max_col, max_row = range_boundaries(ref)
+    except ValueError:
+        return ref
+    if max_row < 1000000:
+        return ref
+    try:
+        sheet_path = _sheet_path_for_name(archive, sheet_name)
+        sheet_root = ET.fromstring(archive.read(sheet_path))
+    except Exception:
+        return ref
+    last_row = _last_row_in_columns(sheet_root, min_col, max_col)
+    if last_row <= min_row:
+        return ref
+    return f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{last_row}"
+
+
+def _source_row_count(ref: str | None) -> int | None:
+    if not ref:
+        return None
+    try:
+        _, min_row, _, max_row = range_boundaries(ref)
+    except ValueError:
+        return None
+    return max(0, max_row - min_row)
 
 
 def _align_to_pivot_headers(
