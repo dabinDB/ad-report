@@ -172,6 +172,14 @@ def _is_average_label(label: Any) -> bool:
     return "평균" in str(label or "")
 
 
+def _dedupe(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _with_existing_options(options: list[str], existing: list[str]) -> list[str]:
+    return _dedupe([*options, *existing])
+
+
 def group_definitions_by_sheet(
     definitions: list[dict[str, Any]],
     sheet_names: list[str] | None = None,
@@ -200,21 +208,81 @@ def render_sheet_definition_json(
             )
 
 
-def definition_editor(definition: dict[str, Any], index: int, dictionary: StandardDictionary) -> dict[str, Any]:
+def field_roles_from_mappings(field_mappings: list[dict[str, Any]]) -> dict[str, str]:
+    roles = {}
+    for mapping in field_mappings:
+        role = mapping.get("final_role")
+        name = str(mapping.get("final_name") or "").strip()
+        if role in {"dimension", "metric"} and name:
+            roles[name] = role
+    return roles
+
+
+def render_source_mapping_editor(source_mapping_schema: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    editable_columns = [
+        "source_column",
+        "dictionary_match",
+        "ai_role",
+        "ai_mapped_to",
+        "confidence",
+        "needs_review",
+        "final_role",
+        "final_name",
+        "reason",
+    ]
+    mapping_df = pd.DataFrame(source_mapping_schema)
+    mapping_df = mapping_df[[column for column in editable_columns if column in mapping_df.columns]]
+    edited_df = st.data_editor(
+        mapping_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "source_column": st.column_config.TextColumn("원본 컬럼", disabled=True),
+            "dictionary_match": st.column_config.TextColumn("사전 매칭", disabled=True),
+            "ai_role": st.column_config.TextColumn("AI 역할", disabled=True),
+            "ai_mapped_to": st.column_config.TextColumn("AI 추천 필드", disabled=True),
+            "confidence": st.column_config.NumberColumn("신뢰도", disabled=True, format="%.2f"),
+            "needs_review": st.column_config.CheckboxColumn("검수 필요", disabled=True),
+            "final_role": st.column_config.SelectboxColumn(
+                "최종 역할",
+                options=["dimension", "metric", "ignore"],
+                required=True,
+            ),
+            "final_name": st.column_config.TextColumn("최종 필드명"),
+            "reason": st.column_config.TextColumn("추천 이유", disabled=True),
+        },
+        key="source_mapping_editor",
+    )
+    records = edited_df.to_dict("records")
+    for record in records:
+        record["kind"] = record.get("final_role")
+        record["mapped_to"] = record.get("final_name")
+    return records
+
+
+def definition_editor(
+    definition: dict[str, Any],
+    index: int,
+    dictionary: StandardDictionary,
+    field_roles: dict[str, str] | None = None,
+) -> dict[str, Any]:
     edited = normalize_definition_location(definition, dictionary)
+    field_roles = field_roles or {}
+    dimension_options = _dedupe([*dictionary.dimension_names, *[name for name, role in field_roles.items() if role == "dimension"]])
+    metric_options = _dedupe([*dictionary.metric_names, *[name for name, role in field_roles.items() if role == "metric"]])
     with st.expander(f"{index + 1}. {definition.get('name', '표 정의')}", expanded=index == 0):
         left, mid, right = st.columns([1.2, 1, 1])
         edited["name"] = left.text_input("표 이름", edited.get("name", ""), key=f"name_{index}")
         edited["group_by"] = mid.multiselect(
             "Group By",
-            dictionary.dimension_names,
-            default=[item for item in edited.get("group_by", []) if item in dictionary.dimension_names],
+            _with_existing_options(dimension_options, edited.get("group_by", [])),
+            default=[item for item in edited.get("group_by", []) if item in _with_existing_options(dimension_options, edited.get("group_by", []))],
             key=f"group_{index}",
         )
         edited["metrics"] = right.multiselect(
             "Metrics",
-            dictionary.metric_names,
-            default=[item for item in edited.get("metrics", []) if item in dictionary.metric_names],
+            _with_existing_options(metric_options, edited.get("metrics", [])),
+            default=[item for item in edited.get("metrics", []) if item in _with_existing_options(metric_options, edited.get("metrics", []))],
             key=f"metrics_{index}",
         )
 
@@ -441,7 +509,11 @@ def main() -> None:
         template_bytes = report_template_file.getvalue()
         source_raw = apply_uploaded_media_name(read_source_file(source_file), media_name, dictionary)
         source_mapping_schema = build_source_mapping_schema(source_raw, dictionary)
-        source_df = normalize_source_dataframe(source_raw, dictionary)
+        st.subheader("원본 필드 매핑 검수")
+        st.caption("AI 추천 역할과 필드명을 확인하고, 최종 역할/필드명을 수정하세요. 사전에 없는 필드도 dimension 또는 metric으로 사용할 수 있습니다.")
+        field_mappings = render_source_mapping_editor(source_mapping_schema)
+        field_roles = field_roles_from_mappings(field_mappings)
+        source_df = normalize_source_dataframe(source_raw, dictionary, field_mappings)
         pivot_source_df = build_pivot_source_dataframe(source_raw, source_df)
         try:
             pivot_sources = detect_pivot_sources(template_bytes)
@@ -451,10 +523,10 @@ def main() -> None:
             pivot_source_error = str(exc)
 
         st.subheader("원본 매핑 스키마")
-        mapping_df = pd.DataFrame(source_mapping_schema)
+        mapping_df = pd.DataFrame(field_mappings)
         st.dataframe(mapping_df, use_container_width=True)
         with st.expander("원본 매핑 스키마 JSON"):
-            st.code(json.dumps(source_mapping_schema, ensure_ascii=False, indent=2), language="json")
+            st.code(json.dumps(field_mappings, ensure_ascii=False, indent=2), language="json")
 
         st.subheader("정규화된 원본 데이터 미리보기")
         st.dataframe(source_df.head(20), use_container_width=True)
@@ -505,8 +577,8 @@ def main() -> None:
 
             st.subheader("표 정의 검수")
             for idx, definition in enumerate(report_definitions):
-                edited = definition_editor(definition, idx, dictionary)
-                errors, warnings = validate_definition(edited, schema, dictionary)
+                edited = definition_editor(definition, idx, dictionary, field_roles)
+                errors, warnings = validate_definition(edited, schema, dictionary, field_roles)
                 for error in errors:
                     st.error(f"{edited.get('name')}: {error}")
                 for warning in warnings:

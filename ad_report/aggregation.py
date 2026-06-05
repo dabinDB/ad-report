@@ -15,16 +15,32 @@ def build_source_mapping_schema(df: pd.DataFrame, dictionary: StandardDictionary
     mapped_counts: dict[str, int] = {}
     for column in df.columns:
         matched = dictionary.match(column)
-        kind = "unmapped"
+        role = "ignore"
+        mapped_to = None
+        confidence = 0.0
+        reason = "사전 매칭 없음"
         if matched:
             mapped_counts[matched] = mapped_counts.get(matched, 0) + 1
-            kind = "dimension" if dictionary.is_dimension(matched) else "metric"
+            role = "dimension" if dictionary.is_dimension(matched) else "metric"
+            mapped_to = matched
+            confidence = 0.98
+            reason = "표준 사전 매칭"
+        else:
+            role, mapped_to, confidence, reason = _infer_field_mapping(df[column], column)
         schema.append(
             {
                 "source_column": str(column),
-                "mapped_to": matched,
-                "kind": kind,
-                "aggregation_when_duplicate": _duplicate_policy(matched, dictionary),
+                "dictionary_match": matched,
+                "ai_role": role,
+                "ai_mapped_to": mapped_to,
+                "confidence": confidence,
+                "needs_review": not matched or confidence < 0.9,
+                "final_role": role,
+                "final_name": mapped_to,
+                "kind": role,
+                "mapped_to": mapped_to,
+                "reason": reason,
+                "aggregation_when_duplicate": _duplicate_policy(mapped_to, dictionary),
             }
         )
 
@@ -34,13 +50,20 @@ def build_source_mapping_schema(df: pd.DataFrame, dictionary: StandardDictionary
     return schema
 
 
-def normalize_source_dataframe(df: pd.DataFrame, dictionary: StandardDictionary) -> pd.DataFrame:
-    renamed = {}
-    for column in df.columns:
-        matched = dictionary.match(column)
-        if matched:
-            renamed[column] = matched
-    normalized = df.rename(columns=renamed).copy()
+def normalize_source_dataframe(
+    df: pd.DataFrame,
+    dictionary: StandardDictionary,
+    field_mappings: list[dict[str, Any]] | None = None,
+) -> pd.DataFrame:
+    if field_mappings:
+        normalized = _apply_field_mappings(df, field_mappings)
+    else:
+        renamed = {}
+        for column in df.columns:
+            matched = dictionary.match(column)
+            if matched:
+                renamed[column] = matched
+        normalized = df.rename(columns=renamed).copy()
     normalized = _consolidate_duplicate_columns(normalized, dictionary)
     normalized = _derive_time_dimensions(normalized, dictionary)
     normalized = _apply_value_mappings(normalized, dictionary)
@@ -48,6 +71,11 @@ def normalize_source_dataframe(df: pd.DataFrame, dictionary: StandardDictionary)
     for metric in dictionary.metric_names:
         if metric in normalized.columns:
             normalized[metric] = _numeric_series(normalized, metric)
+    for mapping in field_mappings or []:
+        if mapping.get("final_role") == "metric":
+            name = str(mapping.get("final_name") or mapping.get("source_column") or "")
+            if name in normalized.columns:
+                normalized[name] = _numeric_series(normalized, name)
     return normalized
 
 
@@ -136,6 +164,51 @@ def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
     else:
         values = values.iloc[:, 0]
     return pd.to_numeric(values, errors="coerce").fillna(0)
+
+
+def _apply_field_mappings(df: pd.DataFrame, field_mappings: list[dict[str, Any]]) -> pd.DataFrame:
+    selected_columns = []
+    renamed_columns = []
+    for mapping in field_mappings:
+        role = mapping.get("final_role") or mapping.get("kind")
+        if role == "ignore":
+            continue
+        source_column = mapping.get("source_column")
+        if source_column not in df.columns:
+            continue
+        final_name = str(mapping.get("final_name") or source_column).strip()
+        if not final_name:
+            continue
+        selected_columns.append(source_column)
+        renamed_columns.append(final_name)
+    if not selected_columns:
+        return df.copy()
+    output = df.loc[:, selected_columns].copy()
+    output.columns = renamed_columns
+    return output
+
+
+def _infer_field_mapping(series: pd.Series, column: Any) -> tuple[str, str, float, str]:
+    name = str(column).strip()
+    non_empty = series.dropna()
+    if len(non_empty) == 0:
+        return "ignore", name, 0.2, "빈 컬럼"
+
+    numeric = pd.to_numeric(non_empty, errors="coerce")
+    numeric_ratio = float(numeric.notna().mean()) if len(non_empty) else 0.0
+    if numeric_ratio >= 0.8:
+        return "metric", name, 0.72, "숫자형 값 비율이 높음"
+
+    dates = pd.to_datetime(non_empty, errors="coerce")
+    date_ratio = float(dates.notna().mean()) if len(non_empty) else 0.0
+    if date_ratio >= 0.7:
+        return "dimension", name, 0.72, "날짜형 값 비율이 높음"
+
+    unique_count = non_empty.astype(str).nunique(dropna=True)
+    unique_ratio = unique_count / max(len(non_empty), 1)
+    if unique_count <= 50 or unique_ratio <= 0.25:
+        return "dimension", name, 0.62, "반복되는 범주형 값"
+    return "dimension", name, 0.45, "텍스트 컬럼"
 
 
 def _duplicate_policy(mapped_to: str | None, dictionary: StandardDictionary) -> str | None:

@@ -10,6 +10,7 @@ def validate_definition(
     definition: dict[str, Any],
     schema: dict[str, Any],
     dictionary: StandardDictionary,
+    field_roles: dict[str, str] | None = None,
 ) -> tuple[list[str], list[str]]:
     from jsonschema import Draft7Validator
 
@@ -23,12 +24,14 @@ def validate_definition(
     sort_by = (definition.get("sort") or {}).get("by")
     location = definition.get("location", {})
 
+    field_roles = field_roles or {}
+
     for dimension in group_by:
-        if not dictionary.is_dimension(dimension):
-            errors.append(f"group_by 값이 표준 차원에 없습니다: {dimension}")
+        if not dictionary.is_dimension(dimension) and field_roles.get(dimension) != "dimension":
+            errors.append(f"group_by 값이 표준 차원 또는 확정된 dimension에 없습니다: {dimension}")
     for metric in metrics:
-        if not dictionary.is_metric(metric):
-            errors.append(f"metrics 값이 표준 지표에 없습니다: {metric}")
+        if not dictionary.is_metric(metric) and field_roles.get(metric) != "metric":
+            errors.append(f"metrics 값이 표준 지표 또는 확정된 metric에 없습니다: {metric}")
     if sort_by and sort_by not in group_by and sort_by not in metrics:
         warnings.append(f"sort.by가 group_by 또는 metrics에 없습니다: {sort_by}")
     if location:
