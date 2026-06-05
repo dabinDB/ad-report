@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter, range_boundaries
 from .dictionary import StandardDictionary, normalize_token
 
 
-TITLE_HINTS = ("top", "데이터", "성과", "요약", "분석", "키워드", "매체", "기기", "소재", "캠페인")
+TITLE_HINTS = ("top", "data", "데이터", "성과", "요약", "분석", "키워드", "매체", "기기", "소재", "캠페인", "상품", "광고유형")
 MAX_SCAN_ROWS = 500
 
 

@@ -47,6 +47,14 @@ categorical_dimensions:
     data_type: string
     synonyms: [소재, 소재명, creative, ad_creative, 광고소재, 크리에이티브]
     default_sort: by_metric
+  상품:
+    data_type: string
+    synonyms: [상품, 상품명, 제품, 제품명, product, product_name, item, item_name]
+    default_sort: by_metric
+  광고유형:
+    data_type: string
+    synonyms: [광고유형, 광고 유형, 유형, ad_type, adtype, ad_format, type]
+    default_sort: by_metric
   기기:
     data_type: string
     synonyms: [기기, 디바이스, device, device_type, 단말]
@@ -119,7 +127,7 @@ metrics:
     numerator: 총비용
     denominator: 클릭수
     multiplier: 1
-    synonyms: [평균클릭비용, CPC, cpc, 평균CPC, 클릭당비용, cost_per_click]
+    synonyms: [평균클릭비용, CPC, cpc, PPC, ppc, 평균CPC, 평균PPC, 클릭당비용, cost_per_click]
     format: "{:,.0f}"
   전환율:
     data_type: float
