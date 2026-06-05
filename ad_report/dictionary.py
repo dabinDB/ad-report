@@ -48,7 +48,7 @@ class StandardDictionary:
             return None
         if token in self._synonym_index:
             return self._synonym_index[token]
-        for synonym, standard_name in self._synonym_index.items():
+        for synonym, standard_name in sorted(self._synonym_index.items(), key=lambda item: len(item[0]), reverse=True):
             if synonym and (synonym in token or token in synonym):
                 return standard_name
         return None

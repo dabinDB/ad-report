@@ -111,7 +111,7 @@ metrics:
   전환매출액:
     data_type: integer
     aggregation: sum
-    synonyms: [전환매출액, 매출, 매출액, revenue, conversion_value, 전환금액]
+    synonyms: [전환매출액, 전환매출, 매출, 매출액, revenue, conversion_value, 전환금액]
     format: "{:,}"
   클릭률:
     data_type: float
