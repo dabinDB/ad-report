@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from io import BytesIO
 import json
 from pathlib import Path
 from typing import Any
@@ -37,12 +38,27 @@ def load_configs() -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def read_source_file(uploaded_file: Any) -> pd.DataFrame:
-    name = uploaded_file.name.lower()
+    return read_source_file_bytes(uploaded_file.getvalue(), uploaded_file.name)
+
+
+@st.cache_data(show_spinner=False)
+def read_source_file_bytes(file_bytes: bytes, file_name: str) -> pd.DataFrame:
+    name = file_name.lower()
     if name.endswith(".csv"):
-        return pd.read_csv(uploaded_file)
+        return pd.read_csv(BytesIO(file_bytes))
     if name.endswith(".tsv"):
-        return pd.read_csv(uploaded_file, sep="\t")
-    return pd.read_excel(uploaded_file)
+        return pd.read_csv(BytesIO(file_bytes), sep="\t")
+    return pd.read_excel(BytesIO(file_bytes))
+
+
+@st.cache_data(show_spinner=False)
+def cached_workbook_sheets(workbook_bytes: bytes) -> list[str]:
+    return list_workbook_sheets(workbook_bytes)
+
+
+@st.cache_data(show_spinner=False)
+def cached_pivot_sources(workbook_bytes: bytes) -> list[dict[str, Any]]:
+    return detect_pivot_sources(workbook_bytes)
 
 
 def apply_uploaded_media_name(df: pd.DataFrame, media_name: str, dictionary: StandardDictionary) -> pd.DataFrame:
@@ -388,7 +404,7 @@ def main() -> None:
         )
         analysis_sheet_names = []
         if analysis_template is not None:
-            analysis_sheet_names = list_workbook_sheets(analysis_template.getvalue())
+            analysis_sheet_names = cached_workbook_sheets(analysis_template.getvalue())
             default_sheets = analysis_sheet_names[:1] if analysis_sheet_names else []
             analysis_selected_sheets = st.multiselect(
                 "분석할 시트",
@@ -448,7 +464,7 @@ def main() -> None:
         )
         report_sheet_names = []
         if report_template_file is not None:
-            report_sheet_names = list_workbook_sheets(report_template_file.getvalue())
+            report_sheet_names = cached_workbook_sheets(report_template_file.getvalue())
             report_default_sheets = report_sheet_names[:1] if report_sheet_names else []
             report_selected_sheets = st.multiselect(
                 "보고서 생성에 사용할 템플릿 시트",
@@ -516,7 +532,7 @@ def main() -> None:
         source_df = normalize_source_dataframe(source_raw, dictionary, field_mappings)
         pivot_source_df = build_pivot_source_dataframe(source_raw, source_df)
         try:
-            pivot_sources = detect_pivot_sources(template_bytes)
+            pivot_sources = cached_pivot_sources(template_bytes)
             pivot_source_error = ""
         except Exception as exc:
             pivot_sources = []

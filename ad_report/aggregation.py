@@ -190,7 +190,7 @@ def _apply_field_mappings(df: pd.DataFrame, field_mappings: list[dict[str, Any]]
 
 def _infer_field_mapping(series: pd.Series, column: Any) -> tuple[str, str, float, str]:
     name = str(column).strip()
-    non_empty = series.dropna()
+    non_empty = series.dropna().head(300)
     if len(non_empty) == 0:
         return "ignore", name, 0.2, "빈 컬럼"
 
@@ -199,16 +199,22 @@ def _infer_field_mapping(series: pd.Series, column: Any) -> tuple[str, str, floa
     if numeric_ratio >= 0.8:
         return "metric", name, 0.72, "숫자형 값 비율이 높음"
 
-    dates = pd.to_datetime(non_empty, errors="coerce")
-    date_ratio = float(dates.notna().mean()) if len(non_empty) else 0.0
-    if date_ratio >= 0.7:
-        return "dimension", name, 0.72, "날짜형 값 비율이 높음"
+    if _looks_date_like_name(name):
+        dates = pd.to_datetime(non_empty, errors="coerce")
+        date_ratio = float(dates.notna().mean()) if len(non_empty) else 0.0
+        if date_ratio >= 0.7:
+            return "dimension", name, 0.72, "날짜형 값 비율이 높음"
 
     unique_count = non_empty.astype(str).nunique(dropna=True)
     unique_ratio = unique_count / max(len(non_empty), 1)
     if unique_count <= 50 or unique_ratio <= 0.25:
         return "dimension", name, 0.62, "반복되는 범주형 값"
     return "dimension", name, 0.45, "텍스트 컬럼"
+
+
+def _looks_date_like_name(name: str) -> bool:
+    lowered = name.lower()
+    return any(token in lowered for token in ["날짜", "일자", "date", "day", "월", "년"])
 
 
 def _duplicate_policy(mapped_to: str | None, dictionary: StandardDictionary) -> str | None:
